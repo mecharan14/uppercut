@@ -1,0 +1,14 @@
+[package]
+name = "uppercut-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Headless engine for Uppercut: project model, command API, media I/O, compositing. No UI dependencies — see docs/architecture.md."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]

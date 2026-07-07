@@ -1,0 +1,13 @@
+[package]
+name = "uppercut-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MCP server exposing uppercut-core's command API and perception tools to AI agents. Phase 1 — see PLAN.md §4."
+
+[[bin]]
+name = "uppercut-mcp"
+path = "src/main.rs"
+
+[dependencies]
+uppercut-core.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "uppercut-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Tauri 2 desktop app for Uppercut. Phase 2 — see PLAN.md §4. Placeholder until GUI work starts."
+
+[[bin]]
+name = "uppercut-app"
+path = "src/main.rs"
+
+[dependencies]
+uppercut-core.workspace = true

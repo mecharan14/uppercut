@@ -1,0 +1,41 @@
+# Rust
+/target/
+**/target/
+# Cargo.lock is committed: this workspace produces binaries (cli/mcp/app),
+# and pinned deps matter for reproducible builds across contributors.
+
+# Node / frontend (Tauri UI)
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Editor / OS
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Media test fixtures (large binaries don't belong in git)
+*.mp4
+*.mov
+*.mkv
+*.wav
+!tests/fixtures/**/*.md
+
+# Scratch
+/scratch/
+/tmp/
