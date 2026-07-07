@@ -1,18 +1,20 @@
-//! Media probing: infer kind and (where supported) duration/dimensions/fps from a file on
-//! disk, backing the `ImportMedia` command.
+//! Media probing and FFmpeg-backed I/O for export.
 //!
-//! Coverage today is deliberately narrow and dependency-free (no system FFmpeg required to
-//! build `uppercut-core`): WAV duration via manual RIFF header parsing. Video/image
-//! metadata is `None` until the Phase 0 media spine spike wires up FFmpeg-backed decode —
-//! see PLAN.md §4 and docs/architecture.md. `ImportMedia` still succeeds for recognized
-//! video/audio/image extensions with unknown fields; only truly unrecognized extensions
-//! are rejected.
+//! `probe()` works without FFmpeg for a narrow set of formats (WAV). When FFmpeg is on
+//! PATH, video probing uses `ffprobe` during import and export.
+
+mod ffmpeg_cli;
 
 use crate::project::MediaKind;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use thiserror::Error;
+
+pub use ffmpeg_cli::{
+    ffmpeg_path, ffprobe_path, is_available as ffmpeg_available, FfmpegCliError, RgbaFrame,
+    VideoEncoder, VideoReader,
+};
 
 #[derive(Debug, Error)]
 pub enum MediaError {
@@ -66,6 +68,15 @@ pub fn probe(path: &Path) -> Result<ProbedMedia, MediaError> {
     if kind == MediaKind::Audio && ext == "wav" {
         if let Some(duration) = probe_wav_duration(path)? {
             probed.duration_secs = Some(duration);
+        }
+    }
+
+    if kind == MediaKind::Video && ffmpeg_cli::is_available() {
+        if let Ok(video) = ffmpeg_cli::probe_video(path) {
+            probed.duration_secs = Some(video.duration_secs);
+            probed.width = Some(video.width);
+            probed.height = Some(video.height);
+            probed.fps = Some(video.fps);
         }
     }
 

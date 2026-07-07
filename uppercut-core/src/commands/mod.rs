@@ -104,6 +104,8 @@ pub enum CommandError {
     NoAudio(Id),
     #[error("{0}")]
     Media(#[from] MediaError),
+    #[error("{0}")]
+    Export(#[from] crate::export::ExportError),
     #[error("not yet implemented: {0}")]
     NotImplemented(&'static str),
 }
@@ -173,11 +175,10 @@ pub fn apply_command(project: &mut Project, cmd: Command) -> Result<CommandOutco
             clip_id,
             gain_db,
         } => set_audio_gain(project, track_id, clip_id, gain_db),
-        Command::Export { .. } => {
-            // Rendering pipeline lands with the Phase 0 media spine spike (PLAN.md §4,
-            // §8). Fail loudly rather than pretend to succeed.
-            Err(CommandError::NotImplemented("Export"))
-        }
+        Command::Export {
+            output_path,
+            preset,
+        } => export_project_cmd(project, &output_path, preset),
     }
 }
 
@@ -529,6 +530,18 @@ fn add_caption(
     Ok(CommandOutcome::ClipAdded { clip_id })
 }
 
+fn export_project_cmd(
+    _project: &mut Project,
+    output_path: &str,
+    preset: ExportPreset,
+) -> Result<CommandOutcome, CommandError> {
+    use crate::export::export_project;
+    use std::path::Path;
+
+    export_project(_project, Path::new(output_path), preset)?;
+    Ok(CommandOutcome::Applied)
+}
+
 fn set_audio_gain(
     project: &mut Project,
     track_id: Id,
@@ -849,7 +862,7 @@ mod tests {
     }
 
     #[test]
-    fn export_is_not_yet_implemented() {
+    fn export_requires_ffmpeg_or_empty_timeline() {
         let mut project = test_project();
         let err = apply_command(
             &mut project,
@@ -859,6 +872,10 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(matches!(err, CommandError::NotImplemented(_)));
+        assert!(
+            matches!(err, CommandError::Export(_))
+                || matches!(err, CommandError::NotImplemented(_)),
+            "unexpected: {err:?}"
+        );
     }
 }

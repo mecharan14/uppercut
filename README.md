@@ -16,10 +16,10 @@ Not affiliated with, endorsed by, or a clone of any existing commercial editor.
 
 ## Status
 
-**Early / pre-alpha.** The engine's project schema and command API exist and are unit- and
-integration-tested; the CLI can build a real timeline end to end (import media, add tracks,
-place/split/trim/move/delete clips, add captions, set gain). Video/audio rendering
-(decode → composite → encode) and the GUI don't exist yet — see the roadmap below.
+**Early / pre-alpha.** The engine's project schema and command API are tested; the CLI can
+build a timeline end to end and **export a cuts-only edit to MP4** (FFmpeg decode → wgpu
+composite → H.264 encode). Auto-captions, audio mixing, MCP, and the GUI are not built yet
+— see the roadmap below.
 
 Read [PLAN.md](PLAN.md) for the full vision, tech stack rationale, and phased roadmap
 before contributing or building on this.
@@ -53,8 +53,9 @@ Windows first, macOS/Linux to follow. AGPL-3.0.
 
 ## Roadmap
 
-- **Phase 0 (current)** — workspace skeleton, project schema v0, command API, CLI. Next up:
-  the media spine spike (FFmpeg decode → wgpu composite → encode).
+- **Phase 0 (current)** — workspace skeleton, project schema v0, command API, CLI, and the
+  media spine (FFmpeg subprocess decode → wgpu composite → encode). Milestone reached for
+  cuts-only video export; audio muxing and linked libav I/O come next.
 - **Phase 1** — headless AI editing: auto-captions, AI voiceover, audio mixing, MCP server.
   Milestone: hand Claude Code a script and a folder of gameplay recordings and get a
   finished video back with no GUI involved.
@@ -80,7 +81,11 @@ Try the CLI:
 cargo run -p uppercut-cli -- new-project demo.uppercut.json --name "my-edit"
 cargo run -p uppercut-cli -- apply demo.uppercut.json '{"command":"AddTrack","kind":"audio","name":"A1"}'
 cargo run -p uppercut-cli -- show demo.uppercut.json
+cargo run -p uppercut-cli -- export demo.uppercut.json out.mp4 --preset tiktok
 ```
+
+Export requires `ffmpeg` and `ffprobe` on PATH (used as subprocesses in Phase 0; linked
+`ffmpeg-the-third` is planned once vcpkg/FFMPEG_DIR is wired for all environments).
 
 ## Contributing
 

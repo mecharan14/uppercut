@@ -1,8 +1,9 @@
 # Architecture
 
-Status: **Phase 0 skeleton.** This describes the target shape for the current phase; it
-will grow as later phases (effects graph, plugin host, GUI) are implemented. See
-[PLAN.md](../PLAN.md) for the full multi-phase roadmap and rationale.
+Status: **Phase 0 — media spine landed.** Export drives FFmpeg subprocess decode/encode
+with an offscreen wgpu compositor in between. Linked libav via `ffmpeg-the-third` replaces
+the subprocess bridge once vcpkg/FFMPEG_DIR is standard in dev/CI. Later phases add effects
+graph, plugin host, and GUI — see [PLAN.md](../PLAN.md).
 
 ## Crate graph
 
@@ -31,9 +32,11 @@ Owns:
 - **Command API** — the `Command` enum and `apply_command(&mut Project, Command) -> Result<...>`
   function matching [command-api.md](command-api.md). This is the *only* sanctioned way to
   mutate a project. Undo/redo is (eventually) a command log, not ad hoc state snapshots.
-- **Media I/O** — FFmpeg-backed decode/encode (Phase 0 spike target).
-- **Compositing** — wgpu render graph (Phase 0+ for basic compositing; effects graph in
-  Phase 3).
+- **Media I/O** — FFmpeg-backed decode/encode. Phase 0 invokes `ffmpeg`/`ffprobe` as
+  subprocesses (no link-time libav dependency); migrate to `ffmpeg-the-third` when dev/CI
+  ships FFmpeg development libraries consistently.
+- **Compositing** — wgpu offscreen render graph (Phase 0: scale/blit layers to output
+  resolution; effects graph in Phase 3).
 - **Perception** — frame rendering to image, transcript (whisper-rs), scene/silence
   detection. These back the MCP perception tools and are engine functions, not MCP-specific
   code, so the CLI can expose them too.

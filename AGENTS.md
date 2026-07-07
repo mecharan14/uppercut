@@ -86,10 +86,11 @@ Before considering a change complete:
 
 ## 4. Current phase
 
-Check PLAN.md §4 for the phase roadmap. As of scaffolding, we are in **Phase 0**: workspace
-skeleton, project schema v0, and the first ~10 commands, proving the
-decode → composite → encode spine works end to end via the CLI. Don't jump ahead to GUI or
-plugin work until Phase 0's milestone (CLI renders a cuts-only timeline JSON to MP4) is real.
+Check PLAN.md §4 for the phase roadmap. Phase 0's core milestone — **CLI renders a
+cuts-only timeline JSON to MP4** — is implemented via `Export` (FFmpeg decode → wgpu
+composite → H.264 encode). Remaining Phase 0 polish: linked libav, audio muxing in export,
+and OTIO hooks. Do not jump ahead to GUI or plugin work until those land or are explicitly
+deprioritized.
 
 ## 5. When in doubt
 

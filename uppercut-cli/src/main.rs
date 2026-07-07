@@ -52,7 +52,7 @@ enum CliCommand {
     },
     /// Print the project state as pretty JSON.
     Show { path: PathBuf },
-    /// Render the project to a video file (not yet implemented — see PLAN.md media spine spike).
+    /// Render the project to a video file (requires ffmpeg on PATH).
     Export {
         path: PathBuf,
         output: PathBuf,
