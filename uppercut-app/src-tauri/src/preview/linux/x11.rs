@@ -4,12 +4,16 @@ use raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle, XlibDisplayHandle,
     XlibWindowHandle,
 };
+use std::os::raw::c_ulong;
 use std::ptr::NonNull;
 use x11::xfixes::XFixesSetWindowShapeRegion;
 use x11::xlib::{
-    Display, ShapeInput, ShapeSet, Window, XCreateSimpleWindow, XDestroyWindow, XFlush, XMapWindow,
+    Display, Window, XCreateSimpleWindow, XDefaultScreen, XDestroyWindow, XFlush, XMapWindow,
     XMoveResizeWindow,
 };
+
+/// X Shape extension kind for input hit-testing (from X11/extensions/shape.h).
+const SHAPE_INPUT: i32 = 2;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Parent {
@@ -111,11 +115,7 @@ impl HasWindowHandle for X11WindowHandle {
     fn window_handle(
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        use std::num::NonZeroU32;
-
-        let window =
-            NonZeroU32::new(self.window).ok_or(raw_window_handle::HandleError::Unavailable)?;
-        let handle = XlibWindowHandle::new(window);
+        let handle = XlibWindowHandle::new(self.window as c_ulong);
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::Xlib(handle)) })
     }
 }
@@ -126,7 +126,8 @@ impl HasDisplayHandle for X11WindowHandle {
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         let display =
             NonNull::new(self.display.cast()).ok_or(raw_window_handle::HandleError::Unavailable)?;
-        let handle = XlibDisplayHandle::new(display);
+        let screen = unsafe { XDefaultScreen(self.display) };
+        let handle = XlibDisplayHandle::new(Some(display), screen);
         Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(RawDisplayHandle::Xlib(handle)) })
     }
 }
@@ -172,16 +173,8 @@ fn ensure_child_window(
 /// Empty ShapeInput region — mouse events pass through to the webview below.
 fn set_click_through(display: *mut Display, window: u32) {
     unsafe {
-        XFixesSetWindowShapeRegion(
-            display,
-            window as Window,
-            ShapeInput as i32,
-            0,
-            0,
-            std::ptr::null_mut(),
-            0,
-            ShapeSet as i32,
-        );
+        // region = 0 (None) clears the input shape so all clicks pass through.
+        XFixesSetWindowShapeRegion(display, window as Window, SHAPE_INPUT, 0, 0, 0);
     }
 }
 

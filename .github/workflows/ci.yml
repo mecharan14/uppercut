@@ -16,8 +16,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # FedericoCarboni/setup-ffmpeg@v3 rejects macOS arm64 (macos-latest).
       - name: Install FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
+        uses: AnimMouse/setup-ffmpeg@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libx11-dev \
+            libxfixes-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libssl-dev
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

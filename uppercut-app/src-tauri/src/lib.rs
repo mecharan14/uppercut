@@ -196,10 +196,27 @@ fn native_window_from_app(app: &AppHandle) -> Result<NativeWindow, String> {
             ns_view: h.ns_view.as_ptr() as usize,
         }),
         #[cfg(target_os = "linux")]
-        RawWindowHandle::Xlib(h) => Ok(NativeWindow::X11 {
-            display: h.display.as_ptr().cast(),
-            window: h.window.get(),
-        }),
+        RawWindowHandle::Xlib(h) => {
+            let display = window
+                .display_handle()
+                .map_err(|e| format!("display handle: {e}"))?;
+            match display.as_raw() {
+                RawDisplayHandle::Xlib(d) => {
+                    let display_ptr = d
+                        .display
+                        .ok_or_else(|| "Xlib display pointer is null".to_string())?
+                        .as_ptr()
+                        .cast();
+                    Ok(NativeWindow::X11 {
+                        display: display_ptr,
+                        window: h.window as u32,
+                    })
+                }
+                other => Err(format!(
+                    "Xlib window handle without Xlib display: {other:?}"
+                )),
+            }
+        }
         #[cfg(target_os = "linux")]
         RawWindowHandle::Wayland(w) => {
             let display = window
