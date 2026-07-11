@@ -27,5 +27,20 @@
       "kind": "wipe_left",
       "default_duration_secs": 0.35
     }
+  ],
+  "stickers": [
+    {
+      "id": "star",
+      "label": "Star",
+      "path": "stickers/star.png",
+      "default_duration_secs": 3.0
+    }
+  ],
+  "sfx": [
+    {
+      "id": "blip",
+      "label": "Blip",
+      "path": "sfx/blip.wav"
+    }
   ]
 }

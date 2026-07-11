@@ -9,6 +9,10 @@ my-pack/
   pack.json
   luts/
     film.cube
+  stickers/
+    star.png
+  sfx/
+    blip.wav
 ```
 
 ## `pack.json` (v1)
@@ -25,6 +29,12 @@ my-pack/
   "transitions": [
     // Aliases of builtin TransitionKind only — no custom shaders in v1
     { "id": "quick", "label": "Quick wipe", "kind": "wipe_left", "default_duration_secs": 0.35 }
+  ],
+  "stickers": [
+    { "id": "star", "label": "Star", "path": "stickers/star.png", "default_duration_secs": 3.0 }
+  ],
+  "sfx": [
+    { "id": "blip", "label": "Blip", "path": "sfx/blip.wav" }
   ]
 }
 ```
@@ -43,10 +53,22 @@ IRIDAS `.cube` (`LUT_3D_SIZE`). Applied on the CPU before GPU upload. Effect id:
 
 Params: `intensity` (0..1, default 1).
 
+### Stickers
+
+PNG (or other image) placed as an image `MediaClip` on a video track (no new clip type).
+Command: `AddStickerFromPack { pack_id, sticker_id, track_id, position_secs }` — imports
+the asset into the media pool if needed, then `AddClip`.
+
+### SFX
+
+Audio file placed as an audio `MediaClip`. Command: `AddSfxFromPack { pack_id, sfx_id,
+track_id, position_secs }`.
+
 ## Commands
 
 - `LoadAssetPack { path }` — validate + record path on the project
 - `UnloadAssetPack { pack_id }`
+- `AddStickerFromPack` / `AddSfxFromPack`
 
 See example: [`examples/packs/starter`](../examples/packs/starter).
-Registry seed: [`examples/registry/README.md`](../examples/registry/README.md).
+Registry seed: [`examples/registry/index.json`](../examples/registry/index.json).

@@ -1,4 +1,4 @@
-// TS mirror of uppercut-core's project schema v4 (docs/project-schema.md). Keep in sync.
+// TS mirror of uppercut-core's project schema v5 (docs/project-schema.md). Keep in sync.
 
 export interface Project {
   schema_version: number;
@@ -27,7 +27,8 @@ export type AnimProperty =
   | "scale_y"
   | "rotation"
   | "opacity"
-  | "volume";
+  | "volume"
+  | "speed";
 
 export type Easing = "linear" | "ease_in" | "ease_out" | "ease_in_out";
 

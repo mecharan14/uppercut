@@ -739,6 +739,7 @@ pub fn mix_timeline_audio(
                 fade_out_secs: 0.0,
                 role: None,
                 speed: 1.0,
+                effects: Vec::new(),
             });
             final_clips.push(AudioMixClip {
                 path: ducked_wav.clone(),
@@ -750,6 +751,7 @@ pub fn mix_timeline_audio(
                 fade_out_secs: 0.0,
                 role: None,
                 speed: 1.0,
+                effects: Vec::new(),
             });
             for c in other {
                 final_clips.push(c.clone());
@@ -929,6 +931,8 @@ pub struct AudioMixClip {
     pub role: Option<TrackAudioRole>,
     /// Timeline playback rate (pitch-preserving via atempo). Default 1.0.
     pub speed: f64,
+    /// Optional WASM audio effects applied after decode, before fades/volume in the bus.
+    pub effects: Vec<crate::project::EffectInstance>,
 }
 
 #[cfg(test)]

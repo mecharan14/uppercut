@@ -73,6 +73,62 @@ export interface MediaAssetsPayload {
   waveform?: WaveformReadyPayload;
 }
 
+export interface PackStickerInfo {
+  id: string;
+  label: string;
+  default_duration_secs: number;
+}
+
+export interface PackSfxInfo {
+  id: string;
+  label: string;
+}
+
+export interface PackLutInfo {
+  id: string;
+  label: string;
+}
+
+export interface PackTransitionInfo {
+  id: string;
+  label: string;
+  kind: string;
+  default_duration_secs: number;
+}
+
+export interface LoadedPackInfo {
+  id: string;
+  name: string;
+  path: string;
+  stickers: PackStickerInfo[];
+  sfx: PackSfxInfo[];
+  luts: PackLutInfo[];
+  transitions: PackTransitionInfo[];
+}
+
+export interface LoadedPluginInfo {
+  id: string;
+  name: string;
+  path: string;
+  has_frame: boolean;
+  has_audio: boolean;
+}
+
+export interface ExtensionCatalog {
+  packs: LoadedPackInfo[];
+  plugins: LoadedPluginInfo[];
+}
+
+export interface RegistryEntry {
+  id: string;
+  kind: "pack" | "plugin";
+  path?: string;
+  git_url?: string;
+  summary: string;
+  schema_version: number;
+  resolved_path?: string | null;
+}
+
 // ---- Project lifecycle ----
 
 export function quickStartProject(): Promise<string> {
@@ -305,6 +361,23 @@ export async function pickExportSavePath(defaultPath: string): Promise<string | 
     defaultPath,
   });
   return firstPath(result);
+}
+
+export async function pickExtensionFolder(title: string): Promise<string | null> {
+  const result = await open({
+    directory: true,
+    multiple: false,
+    title,
+  });
+  return firstPath(result);
+}
+
+export function listExtensions(): Promise<ExtensionCatalog> {
+  return invoke<ExtensionCatalog>("list_extensions");
+}
+
+export function listRegistry(): Promise<RegistryEntry[]> {
+  return invoke<RegistryEntry[]>("list_registry");
 }
 
 // ---- Window chrome (frameless titlebar) ----

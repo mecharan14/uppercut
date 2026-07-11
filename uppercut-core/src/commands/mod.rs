@@ -183,6 +183,20 @@ pub enum Command {
     UnloadWasmPlugin {
         plugin_id: String,
     },
+    /// Place a sticker image from a loaded pack onto a video track.
+    AddStickerFromPack {
+        pack_id: String,
+        sticker_id: String,
+        track_id: Id,
+        position_secs: f64,
+    },
+    /// Place an SFX audio clip from a loaded pack onto an audio track.
+    AddSfxFromPack {
+        pack_id: String,
+        sfx_id: String,
+        track_id: Id,
+        position_secs: f64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -429,6 +443,18 @@ pub fn apply_command(project: &mut Project, cmd: Command) -> Result<CommandOutco
         Command::UnloadAssetPack { pack_id } => unload_asset_pack(project, &pack_id),
         Command::LoadWasmPlugin { path } => load_wasm_plugin(project, &path),
         Command::UnloadWasmPlugin { plugin_id } => unload_wasm_plugin(project, &plugin_id),
+        Command::AddStickerFromPack {
+            pack_id,
+            sticker_id,
+            track_id,
+            position_secs,
+        } => add_sticker_from_pack(project, &pack_id, &sticker_id, track_id, position_secs),
+        Command::AddSfxFromPack {
+            pack_id,
+            sfx_id,
+            track_id,
+            position_secs,
+        } => add_sfx_from_pack(project, &pack_id, &sfx_id, track_id, position_secs),
     }
 }
 
@@ -1203,6 +1229,11 @@ fn validate_keyframes(tracks: Vec<KeyframeTrack>) -> Result<Vec<KeyframeTrack>, 
                     "opacity keyframe must be in 0..=1".into(),
                 ));
             }
+            if track.property == AnimProperty::Speed && !(0.25..=4.0).contains(&key.value) {
+                return Err(CommandError::InvalidKeyframes(
+                    "speed keyframe must be in 0.25..=4".into(),
+                ));
+            }
         }
         track.keys.sort_by(|a, b| {
             a.time_secs
@@ -1452,6 +1483,84 @@ fn unload_wasm_plugin(
         )));
     }
     Ok(CommandOutcome::Applied)
+}
+
+fn find_or_import_media(project: &mut Project, path: &std::path::Path) -> Result<Id, CommandError> {
+    if let Some(existing) = project.media.iter().find(|m| m.path == path) {
+        return Ok(existing.id);
+    }
+    let outcome = import_media(project, &path.to_string_lossy())?;
+    match outcome {
+        CommandOutcome::MediaImported { media_id } => Ok(media_id),
+        _ => Err(CommandError::AssetPack("import failed".into())),
+    }
+}
+
+fn add_sticker_from_pack(
+    project: &mut Project,
+    pack_id: &str,
+    sticker_id: &str,
+    track_id: Id,
+    position_secs: f64,
+) -> Result<CommandOutcome, CommandError> {
+    let packs = crate::packs::load_project_packs(project);
+    let (pack, sticker) =
+        crate::packs::find_sticker(&packs, pack_id, sticker_id).ok_or_else(|| {
+            CommandError::AssetPack(format!("sticker '{pack_id}/{sticker_id}' not found"))
+        })?;
+    let asset = pack.root.join(&sticker.path);
+    if !asset.is_file() {
+        return Err(CommandError::AssetPack(format!(
+            "sticker file missing: {}",
+            asset.display()
+        )));
+    }
+    let track = project
+        .find_track(track_id)
+        .ok_or(CommandError::TrackNotFound(track_id))?;
+    if track.kind != TrackKind::Video {
+        return Err(CommandError::TrackKindMismatch(
+            track_id,
+            track.kind,
+            TrackKind::Video,
+        ));
+    }
+    let media_id = find_or_import_media(project, &asset)?;
+    let dur = sticker.default_duration_secs.max(0.1);
+    add_clip(project, track_id, media_id, position_secs, 0.0, dur)
+}
+
+fn add_sfx_from_pack(
+    project: &mut Project,
+    pack_id: &str,
+    sfx_id: &str,
+    track_id: Id,
+    position_secs: f64,
+) -> Result<CommandOutcome, CommandError> {
+    let packs = crate::packs::load_project_packs(project);
+    let (pack, sfx) = crate::packs::find_sfx(&packs, pack_id, sfx_id)
+        .ok_or_else(|| CommandError::AssetPack(format!("sfx '{pack_id}/{sfx_id}' not found")))?;
+    let asset = pack.root.join(&sfx.path);
+    if !asset.is_file() {
+        return Err(CommandError::AssetPack(format!(
+            "sfx file missing: {}",
+            asset.display()
+        )));
+    }
+    let track = project
+        .find_track(track_id)
+        .ok_or(CommandError::TrackNotFound(track_id))?;
+    if track.kind != TrackKind::Audio {
+        return Err(CommandError::TrackKindMismatch(
+            track_id,
+            track.kind,
+            TrackKind::Audio,
+        ));
+    }
+    let media_id = find_or_import_media(project, &asset)?;
+    let probed = media::probe(&asset)?;
+    let dur = probed.duration_secs.unwrap_or(1.0).max(0.1);
+    add_clip(project, track_id, media_id, position_secs, 0.0, dur)
 }
 
 fn generate_voiceover(
@@ -3314,5 +3423,59 @@ mod tests {
             .is_none());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn add_sticker_from_pack_imports_and_places_clip() {
+        let pack_root =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/packs/starter");
+        assert!(
+            pack_root.join("pack.json").is_file(),
+            "starter pack missing at {}",
+            pack_root.display()
+        );
+
+        let mut project = Project::new("sticker-test", Settings::default());
+        apply_command(
+            &mut project,
+            Command::LoadAssetPack {
+                path: pack_root.display().to_string(),
+            },
+        )
+        .unwrap();
+        let track_id = match apply_command(
+            &mut project,
+            Command::AddTrack {
+                kind: TrackKind::Video,
+                name: "V1".into(),
+                id: None,
+            },
+        )
+        .unwrap()
+        {
+            CommandOutcome::TrackAdded { track_id } => track_id,
+            other => panic!("unexpected {other:?}"),
+        };
+        let outcome = apply_command(
+            &mut project,
+            Command::AddStickerFromPack {
+                pack_id: "starter".into(),
+                sticker_id: "star".into(),
+                track_id,
+                position_secs: 1.0,
+            },
+        )
+        .unwrap();
+        assert!(matches!(outcome, CommandOutcome::ClipAdded { .. }));
+        assert!(!project.media.is_empty());
+        let clip = project
+            .find_track(track_id)
+            .unwrap()
+            .clips
+            .iter()
+            .find_map(|c| c.as_media())
+            .unwrap();
+        assert!((clip.position_secs - 1.0).abs() < 1e-9);
+        assert!((clip.source_out_secs - 3.0).abs() < 1e-9);
     }
 }

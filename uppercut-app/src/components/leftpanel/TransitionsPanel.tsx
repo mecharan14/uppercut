@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { Blend } from "lucide-react";
 import { setClipTransition } from "../../lib/commands";
+import * as ipc from "../../lib/ipc";
 import type { ClipTransition, MediaClip, TransitionKind } from "../../lib/types";
 import { clipDurationSecs, TRANSITION_KINDS } from "../../lib/types";
 import { useEditorStore } from "../../store/editorStore";
@@ -8,6 +10,34 @@ export function TransitionsPanel() {
   const project = useEditorStore((s) => s.project);
   const selection = useEditorStore((s) => s.selection);
   const dispatch = useEditorStore((s) => s.dispatch);
+  const [packAliases, setPackAliases] = useState<
+    { kind: TransitionKind; label: string; duration: number }[]
+  >([]);
+
+  useEffect(() => {
+    if (!project) {
+      setPackAliases([]);
+      return;
+    }
+    void ipc
+      .listExtensions()
+      .then((c) => {
+        const aliases: { kind: TransitionKind; label: string; duration: number }[] = [];
+        for (const p of c.packs) {
+          for (const t of p.transitions) {
+            if (TRANSITION_KINDS.some((k) => k.id === t.kind)) {
+              aliases.push({
+                kind: t.kind as TransitionKind,
+                label: `${p.name}: ${t.label}`,
+                duration: t.default_duration_secs,
+              });
+            }
+          }
+        }
+        setPackAliases(aliases);
+      })
+      .catch(() => setPackAliases([]));
+  }, [project, project?.asset_pack_paths?.join("|")]);
 
   const track = project?.tracks.find((t) => t.id === selection?.trackId);
   const clip = track?.clips.find((c) => c.id === selection?.clipId);
@@ -37,10 +67,11 @@ export function TransitionsPanel() {
     await dispatch(setClipTransition(track!.id, mediaClip!.id, transition));
   }
 
-  function pick(kind: TransitionKind) {
+  function pick(kind: TransitionKind, defaultDur?: number) {
     void apply({
       kind,
-      duration_secs: current?.duration_secs ?? Math.min(0.5, Math.max(0.05, maxDur)),
+      duration_secs:
+        current?.duration_secs ?? Math.min(defaultDur ?? 0.5, Math.max(0.05, maxDur)),
     });
   }
 
@@ -60,6 +91,18 @@ export function TransitionsPanel() {
                 className={current?.kind === t.id ? "active" : undefined}
                 disabled={locked}
                 onClick={() => pick(t.id)}
+              >
+                <Blend size={14} strokeWidth={1.75} />
+                {t.label}
+              </button>
+            ))}
+            {packAliases.map((t, i) => (
+              <button
+                key={`pack-${i}-${t.kind}`}
+                type="button"
+                className={current?.kind === t.kind ? "active" : undefined}
+                disabled={locked}
+                onClick={() => pick(t.kind, t.duration)}
               >
                 <Blend size={14} strokeWidth={1.75} />
                 {t.label}

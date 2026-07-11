@@ -1,4 +1,4 @@
-# WASM plugin API v1 (frame effects)
+# WASM plugin API v1 (frame + audio effects)
 
 Sandboxed plugins via [wasmtime](https://wasmtime.dev/) (Apache-2.0 / MIT — AGPL-compatible
 when linked). Plugins cannot access the filesystem, network, or host APIs beyond the
@@ -31,8 +31,14 @@ Exports (required):
 
 | Export | Signature | Notes |
 |--------|-----------|--------|
-| `memory` | linear memory | Host writes tightly packed RGBA8 into offset 0 |
-| `process` | `(ptr: i32, len: i32, width: i32, height: i32) -> ()` | Mutate buffer in place |
+| `memory` | linear memory | Host writes tightly packed buffers at offset 0 |
+
+Plus at least one of:
+
+| Export | Signature | Notes |
+|--------|-----------|--------|
+| `process` | `(ptr: i32, len: i32, width: i32, height: i32) -> ()` | Mutate RGBA8 buffer in place |
+| `process_audio` | `(ptr, sample_count, sample_rate, channels, intensity_milli) -> ()` | Mutate interleaved f32 PCM; `intensity_milli` is `round(intensity * 1000)` from effect params |
 
 No host imports in v1. The module must not require WASI.
 
@@ -40,20 +46,25 @@ No host imports in v1. The module must not require WASI.
 
 1. `LoadWasmPlugin { path }` validates the manifest, compiles the module, stores the path
    on the project.
-2. During preview/export, after decode and before GPU upload, enabled `wasm:*` effects on
-   a layer run through `PluginHost::apply_effects`.
-3. Builtin GPU effects still run after upload.
+2. **Video:** during preview/export, after decode and before GPU upload, enabled `wasm:*`
+   frame effects run through `PluginHost::apply_effects`.
+3. **Audio:** before FFmpeg amix, clips with audio-capable `wasm:*` effects are decoded to
+   f32 PCM, processed via `PluginHost::apply_audio_effects`, then remixed.
+4. Builtin GPU effects still run after upload on video.
 
-## Template
+## Templates
 
-[`examples/plugins/invert`](../examples/plugins/invert) — regenerate WASM bytes with:
+- [`examples/plugins/invert`](../examples/plugins/invert) — frame invert
+- [`examples/plugins/gain`](../examples/plugins/gain) — audio gain (`intensity` param)
+
+Regenerate WASM bytes:
 
 ```rust
-let bytes = uppercut_core::plugins::compile_invert_wasm()?;
-std::fs::write("examples/plugins/invert/invert.wasm", bytes)?;
+let bytes = uppercut_core::compile_invert_wasm()?;
+// or compile_gain_wasm()
 ```
 
-Or build the Rust `cdylib` sources in that directory for `wasm32-unknown-unknown`.
+Or: `cargo run -p uppercut-core --example write_gain_wasm`.
 
 ## Commands
 

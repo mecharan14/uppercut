@@ -8,15 +8,19 @@ import {
   Blend,
   Aperture,
   SlidersHorizontal,
+  Blocks,
 } from "lucide-react";
 import { useEditorStore, type LeftTab } from "../../store/editorStore";
 import { Tooltip } from "../ui/Tooltip";
 import { MediaPanel } from "./MediaPanel";
 import { AudioPanel } from "./AudioPanel";
 import { TextPanel } from "./TextPanel";
-import { ComingSoonPanel } from "./ComingSoonPanel";
 import { EffectsPanel } from "./EffectsPanel";
 import { TransitionsPanel } from "./TransitionsPanel";
+import { StickersPanel } from "./StickersPanel";
+import { FiltersPanel } from "./FiltersPanel";
+import { AdjustPanel } from "./AdjustPanel";
+import { ExtensionsPanel } from "./ExtensionsPanel";
 
 const TABS: { id: LeftTab; icon: LucideIcon; label: string }[] = [
   { id: "media", icon: Film, label: "Media" },
@@ -27,18 +31,12 @@ const TABS: { id: LeftTab; icon: LucideIcon; label: string }[] = [
   { id: "transitions", icon: Blend, label: "Transitions" },
   { id: "filters", icon: Aperture, label: "Filters" },
   { id: "adjustment", icon: SlidersHorizontal, label: "Adjust" },
+  { id: "extensions", icon: Blocks, label: "Extensions" },
 ];
-
-const STUB_PITCH: Record<string, string> = {
-  stickers: "Drop in animated stickers and shape overlays.",
-  filters: "One-click color grading presets.",
-  adjustment: "Manual exposure, contrast, and color wheels.",
-};
 
 export function LeftPanel() {
   const leftTab = useEditorStore((s) => s.leftTab);
   const setLeftTab = useEditorStore((s) => s.setLeftTab);
-  const active = TABS.find((t) => t.id === leftTab);
 
   return (
     <aside className="panel left-panel">
@@ -62,16 +60,12 @@ export function LeftPanel() {
         {leftTab === "media" && <MediaPanel />}
         {leftTab === "audio" && <AudioPanel />}
         {leftTab === "text" && <TextPanel />}
+        {leftTab === "stickers" && <StickersPanel />}
         {leftTab === "effects" && <EffectsPanel />}
         {leftTab === "transitions" && <TransitionsPanel />}
-        {leftTab !== "media" &&
-          leftTab !== "audio" &&
-          leftTab !== "text" &&
-          leftTab !== "effects" &&
-          leftTab !== "transitions" &&
-          active && (
-            <ComingSoonPanel icon={active.icon} title={active.label} pitch={STUB_PITCH[leftTab] ?? ""} />
-          )}
+        {leftTab === "filters" && <FiltersPanel />}
+        {leftTab === "adjustment" && <AdjustPanel />}
+        {leftTab === "extensions" && <ExtensionsPanel />}
       </div>
     </aside>
   );

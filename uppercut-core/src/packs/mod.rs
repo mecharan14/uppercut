@@ -18,6 +18,10 @@ pub struct PackManifest {
     pub luts: Vec<PackLut>,
     #[serde(default)]
     pub transitions: Vec<PackTransitionAlias>,
+    #[serde(default)]
+    pub stickers: Vec<PackSticker>,
+    #[serde(default)]
+    pub sfx: Vec<PackSfx>,
 }
 
 fn default_pack_version() -> String {
@@ -77,6 +81,26 @@ fn default_transition_duration() -> f64 {
     0.5
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct PackSticker {
+    pub id: String,
+    pub label: String,
+    pub path: String,
+    #[serde(default = "default_sticker_duration")]
+    pub default_duration_secs: f64,
+}
+
+fn default_sticker_duration() -> f64 {
+    3.0
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PackSfx {
+    pub id: String,
+    pub label: String,
+    pub path: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct LoadedPack {
     pub root: PathBuf,
@@ -111,6 +135,30 @@ pub fn load_pack(root: &Path) -> Result<LoadedPack, String> {
         manifest,
         luts,
     })
+}
+
+pub fn find_pack<'a>(packs: &'a [LoadedPack], pack_id: &str) -> Option<&'a LoadedPack> {
+    packs.iter().find(|p| p.manifest.id == pack_id)
+}
+
+pub fn find_sticker<'a>(
+    packs: &'a [LoadedPack],
+    pack_id: &str,
+    sticker_id: &str,
+) -> Option<(&'a LoadedPack, &'a PackSticker)> {
+    let pack = find_pack(packs, pack_id)?;
+    let sticker = pack.manifest.stickers.iter().find(|s| s.id == sticker_id)?;
+    Some((pack, sticker))
+}
+
+pub fn find_sfx<'a>(
+    packs: &'a [LoadedPack],
+    pack_id: &str,
+    sfx_id: &str,
+) -> Option<(&'a LoadedPack, &'a PackSfx)> {
+    let pack = find_pack(packs, pack_id)?;
+    let sfx = pack.manifest.sfx.iter().find(|s| s.id == sfx_id)?;
+    Some((pack, sfx))
 }
 
 pub fn pack_id_at(root: &Path) -> Option<String> {

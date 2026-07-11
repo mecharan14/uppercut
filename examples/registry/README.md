@@ -1,27 +1,31 @@
 # Uppercut extension registry (seed)
 
-Curated index of example asset packs and WASM plugins that ship with this repository.
-Community contributions: open a PR adding a row that points at a pack/plugin directory
-with a valid `pack.json` / `plugin.json`. CI should validate manifests once packs land
-in a dedicated `uppercut-registry` repo — until then, this file is the seed index.
+Curated, machine-readable index of example asset packs and WASM plugins that ship with
+this repository. See [`index.json`](index.json).
 
-## Asset packs
+Community contributions: open a PR adding an entry that points at a pack/plugin directory
+with a valid `pack.json` / `plugin.json`. A future dedicated `uppercut-registry` GitHub
+repo may host remote URLs; until then, this file is the local seed.
 
-| Id | Path | Notes |
-|----|------|-------|
-| `starter` | [`../packs/starter`](../packs/starter) | Neon caption style + punch `.cube` LUT |
+## `index.json` fields
 
-Load in a project via command `LoadAssetPack` with the pack directory path. LUT effect ids
-look like `pack:starter:lut:punch`.
+| Field | Notes |
+|-------|--------|
+| `id` | Unique slug |
+| `kind` | `pack` or `plugin` |
+| `path` | Repo-relative path (preferred for in-tree examples) |
+| `git_url` | Optional remote clone URL (future) |
+| `summary` | One-line description |
+| `schema_version` | Manifest schema for this entry (`1` today) |
 
-## WASM plugins
+CI validates that `index.json` parses and that listed local `path` entries exist.
 
-| Id | Path | Notes |
-|----|------|-------|
-| `invert` | [`../plugins/invert`](../plugins/invert) | Invert RGB; template for “30-line” effects |
+## Load in the app
 
-Generate `invert.wasm` with `compile_invert_wasm()` (see `docs/plugin-api.md`) or `rustc`
-as noted in `invert.rs`. Load via `LoadWasmPlugin`; effect id `wasm:invert`.
+Use the **Extensions** left-rail tab: browse loaded packs/plugins, add folders, or Load from
+this registry when running from a repo checkout.
+
+CLI / commands: `LoadAssetPack` / `LoadWasmPlugin` with the directory path.
 
 ## Specs
 

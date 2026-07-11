@@ -53,3 +53,29 @@ jobs:
         env:
           # Prefer Vulkan/GL/DX12; soft adapters help headless Linux runners.
           WGPU_BACKEND: vulkan,dx12,metal,gl
+
+      - name: Validate registry index
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          root = Path("examples/registry")
+          index = root / "index.json"
+          data = json.loads(index.read_text(encoding="utf-8"))
+          assert isinstance(data, list), "index.json must be a list"
+          required = {"id", "kind", "summary", "schema_version"}
+          for i, entry in enumerate(data):
+              missing = required - set(entry)
+              assert not missing, f"entry {i} missing {missing}"
+              assert entry["kind"] in ("pack", "plugin"), entry
+              path = entry.get("path")
+              if path:
+                  resolved = (root / path).resolve()
+                  assert resolved.exists(), f"missing path for {entry['id']}: {resolved}"
+                  if entry["kind"] == "pack":
+                      assert (resolved / "pack.json").is_file(), resolved
+                  else:
+                      assert (resolved / "plugin.json").is_file(), resolved
+          print(f"ok: {len(data)} registry entries")
+          PY

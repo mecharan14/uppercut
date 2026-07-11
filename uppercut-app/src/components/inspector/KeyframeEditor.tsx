@@ -19,6 +19,7 @@ const PROP_OPTIONS: { value: AnimProperty; label: string; video?: boolean; audio
   { value: "scale_y", label: "Scale Y", video: true },
   { value: "rotation", label: "Rotation", video: true },
   { value: "opacity", label: "Opacity", video: true },
+  { value: "speed", label: "Speed", video: true, audio: true },
   { value: "volume", label: "Volume (dB)", audio: true, video: true },
 ];
 
@@ -44,6 +45,8 @@ function defaultValue(prop: AnimProperty, clip: MediaClip): number {
       return t?.rotation_deg ?? 0;
     case "opacity":
       return t?.opacity ?? 1;
+    case "speed":
+      return clip.speed ?? 1;
     case "volume":
       return clip.gain_db;
   }
@@ -212,6 +215,7 @@ export function KeyframeEditor({
                   let value = parseFloat(e.target.value);
                   if (Number.isNaN(value)) value = 0;
                   if (property === "opacity") value = Math.max(0, Math.min(1, value));
+                  if (property === "speed") value = Math.max(0.25, Math.min(4, value));
                   void updateKey(i, { value });
                 }}
                 title="Value"

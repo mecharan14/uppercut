@@ -1,9 +1,12 @@
+import { useEffect, useState } from "react";
 import { Sparkles, Trash2 } from "lucide-react";
 import { setClipEffects } from "../../lib/commands";
+import * as ipc from "../../lib/ipc";
+import type { ExtensionCatalog } from "../../lib/ipc";
 import type { EffectInstance, MediaClip, Track } from "../../lib/types";
 import { useEditorStore } from "../../store/editorStore";
 
-export const BUILTIN_EFFECTS: {
+export const BUILTIN_VIDEO_EFFECTS: {
   id: string;
   label: string;
   defaults: Record<string, number>;
@@ -23,6 +26,9 @@ export const BUILTIN_EFFECTS: {
   },
 ];
 
+/** @deprecated use BUILTIN_VIDEO_EFFECTS */
+export const BUILTIN_EFFECTS = BUILTIN_VIDEO_EFFECTS;
+
 function newId(): string {
   return crypto.randomUUID();
 }
@@ -31,12 +37,22 @@ export function EffectsPanel() {
   const project = useEditorStore((s) => s.project);
   const selection = useEditorStore((s) => s.selection);
   const dispatch = useEditorStore((s) => s.dispatch);
+  const [catalog, setCatalog] = useState<ExtensionCatalog | null>(null);
+
+  useEffect(() => {
+    if (!project) {
+      setCatalog(null);
+      return;
+    }
+    void ipc.listExtensions().then(setCatalog).catch(() => setCatalog(null));
+  }, [project, project?.wasm_plugin_paths?.join("|"), project?.asset_pack_paths?.join("|")]);
 
   const track = project?.tracks.find((t) => t.id === selection?.trackId);
   const clip = track?.clips.find((c) => c.id === selection?.clipId);
   const mediaClip =
     clip && clip.type !== "caption" ? (clip as MediaClip) : null;
   const locked = track?.locked ?? true;
+  const isAudio = track?.kind === "audio";
 
   if (!mediaClip || !track || track.kind === "caption") {
     return (
@@ -48,6 +64,28 @@ export function EffectsPanel() {
   }
 
   const effects = mediaClip.effects ?? [];
+  const packLuts =
+    !isAudio
+      ? (catalog?.packs.flatMap((p) =>
+          p.luts.map((l) => ({
+            id: `pack:${p.id}:lut:${l.id}`,
+            label: `${p.name}: ${l.label}`,
+            defaults: { intensity: 1 },
+          })),
+        ) ?? [])
+      : [];
+  const wasmEffects =
+    catalog?.plugins
+      .filter((p) => (isAudio ? p.has_audio : p.has_frame))
+      .map((p) => ({
+        id: `wasm:${p.id}`,
+        label: p.name,
+        defaults: { intensity: 1 },
+      })) ?? [];
+
+  const catalogItems = isAudio
+    ? wasmEffects
+    : [...BUILTIN_VIDEO_EFFECTS, ...packLuts, ...wasmEffects.filter((p) => p.id.startsWith("wasm:"))];
 
   async function commit(next: EffectInstance[]) {
     await dispatch(setClipEffects(track!.id, mediaClip!.id, next));
@@ -56,9 +94,13 @@ export function EffectsPanel() {
   return (
     <div className="panel-body effects-panel">
       <h3>Effects</h3>
-      <p className="empty-hint">Builtin GPU effects applied before composite.</p>
+      <p className="empty-hint">
+        {isAudio
+          ? "Audio WASM plugins applied on mix/export."
+          : "Builtin GPU / pack LUT / WASM frame effects."}
+      </p>
       <div className="effects-catalog">
-        {BUILTIN_EFFECTS.map((e) => (
+        {catalogItems.map((e) => (
           <button
             key={e.id}
             type="button"
@@ -86,6 +128,7 @@ export function EffectsPanel() {
         effects={effects}
         locked={locked}
         onCommit={commit}
+        labelLookup={[...BUILTIN_VIDEO_EFFECTS, ...packLuts, ...wasmEffects]}
       />
     </div>
   );
@@ -97,12 +140,14 @@ export function EffectList({
   effects,
   locked,
   onCommit,
+  labelLookup = BUILTIN_VIDEO_EFFECTS,
 }: {
   track: Track;
   clip: MediaClip;
   effects: EffectInstance[];
   locked: boolean;
   onCommit: (next: EffectInstance[]) => Promise<void>;
+  labelLookup?: { id: string; label: string }[];
 }) {
   void track;
   void clip;
@@ -114,7 +159,7 @@ export function EffectList({
   return (
     <ul className="effect-list">
       {effects.map((fx, idx) => {
-        const meta = BUILTIN_EFFECTS.find((b) => b.id === fx.effect_id);
+        const meta = labelLookup.find((b) => b.id === fx.effect_id);
         return (
           <li key={fx.id} className={!fx.enabled ? "disabled" : ""}>
             <div className="effect-list-header">
@@ -157,8 +202,6 @@ export function EffectList({
                     const next = effects.map((x, i) =>
                       i === idx ? { ...x, params: { ...x.params, [key]: v } } : x,
                     );
-                    // Optimistic local only until mouseup — but range needs live commit throttle.
-                    // Commit on change is OK for few effects.
                     void onCommit(next);
                   }}
                 />

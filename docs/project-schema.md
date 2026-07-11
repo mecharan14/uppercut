@@ -1,4 +1,4 @@
-# Project schema — v4
+# Project schema — v5
 
 Status: **current**. This is the source of truth for `uppercut-core`'s project
 model. Implementation types in `uppercut-core/src/project/` must match this document; if
@@ -12,7 +12,7 @@ extension `.uppercut.json`.
 
 ```jsonc
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "id": "b3f1c2a0-...-uuid",
   "name": "ultra-bruno-ep12",
   "settings": {
@@ -31,7 +31,7 @@ extension `.uppercut.json`.
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | u32 | `4` for this spec. Loaders accept `1`..=`4`; saves write `4`. |
+| `schema_version` | u32 | `5` for this spec. Loaders accept `1`..=`5`; saves write `5`. |
 | `id` | string (UUIDv4) | Stable project identity, generated on creation. |
 | `name` | string | Human-facing project name; not used for file paths. |
 | `settings.*` | — | Same as v3 (`fps`, `width`, `height`, `sample_rate`, `duck_db`). |
@@ -45,9 +45,12 @@ extension `.uppercut.json`.
 | Field | Notes |
 |---|---|
 | `source_in_secs` / `source_out_secs` | Source media range. |
-| `speed` | Playback rate (default `1.0`, clamp `0.25`..`4.0`). Timeline duration = `(source_out − source_in) / speed`. Source time = `source_in + (t − position) * speed`. Pitch-preserving audio via FFmpeg `atempo`. |
-| `transform` / `keyframes` / `effects` | Phase 3.1–3.4. |
+| `speed` | Base playback rate (default `1.0`, clamp `0.25`..`4.0`) when no Speed keyframes. |
+| `keyframes` | May include `AnimProperty::Speed` keys (same clamp). Timeline duration and source time are the **integral of speed** over the clip (piecewise-linear with easing between keys). |
+| `transform` / `effects` | Phase 3. |
 | `outgoing_transition` | Optional `ClipTransition` (video tracks). |
+
+Audio with Speed keys is segmented (~50 ms / key intervals) and chained via FFmpeg `atempo`.
 
 ### Builtin effects
 
@@ -58,7 +61,7 @@ extension `.uppercut.json`.
 | `builtin:lut_contrast` / `builtin:lut_warm` | `intensity` |
 | `builtin:glitch` | `intensity`, `slice` |
 
-Pack LUTs: `pack:<pack_id>:lut:<lut_id>`. WASM: `wasm:<plugin_id>` when loaded.
+Pack LUTs: `pack:<pack_id>:lut:<lut_id>`. WASM: `wasm:<plugin_id>` when loaded (frame and/or audio ABI).
 
 ### ClipTransition
 
@@ -66,13 +69,15 @@ Pack LUTs: `pack:<pack_id>:lut:<lut_id>`. WASM: `wasm:<plugin_id>` when loaded.
 `wipe_down`, `slide_left`, `slide_right`, `iris`, `blur_dissolve`, plus `duration_secs`.
 Renderer dual-decodes during `[cut − d, cut)` and blends via WGSL (`transition.wgsl`).
 
-## What's intentionally not in v4 yet
+## What's intentionally not in v5 yet
 
-Keyframed speed ramps, macOS/Linux native preview, in-app pack/plugin browser, stickers/SFX
-packs, audio-only WASM effects (Phase 4 / later).
+Background removal, chroma, masks, tracking, stabilization, denoise, multi-cam, in-app
+remote marketplace with payments, custom pack WGSL shaders (Phase 4).
 
 ## Version history
 
 - **v0–v3**: see prior history (keyframes/effects in v2; `outgoing_transition` in v3).
 - **v4** (Phase 3 close-out): `MediaClip.speed`; ten transition kinds; glitch; project
-  `asset_pack_paths` / `wasm_plugin_paths`. Older files load with defaults.
+  `asset_pack_paths` / `wasm_plugin_paths`.
+- **v5** (Phase 3 deferred): keyframed `AnimProperty::Speed` ramps (integral source time);
+  stickers/SFX pack entries + commands; audio WASM `process_audio`.

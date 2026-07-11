@@ -21,7 +21,8 @@ export type LeftTab =
   | "effects"
   | "transitions"
   | "filters"
-  | "adjustment";
+  | "adjustment"
+  | "extensions";
 export type ToastKind = "info" | "success" | "error";
 
 export interface ToastItem {

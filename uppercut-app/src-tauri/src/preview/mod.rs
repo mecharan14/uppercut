@@ -1,9 +1,18 @@
 //! Native wgpu preview panel (Phase 2).
 
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+mod gfx;
+
 #[cfg(windows)]
 mod win32;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod macos;
+
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod stub;
 
 use thiserror::Error;
@@ -18,7 +27,7 @@ pub struct PreviewBounds {
 
 #[derive(Debug, Error)]
 pub enum PreviewError {
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     #[error("preview not supported on this platform yet")]
     Unsupported,
     #[error("preview not initialized")]
@@ -32,9 +41,19 @@ pub type NativeWindow = win32::NativeWindow;
 #[cfg(windows)]
 type PlatformPreview = win32::PlatformPreview;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub type NativeWindow = macos::NativeWindow;
+#[cfg(target_os = "macos")]
+type PlatformPreview = macos::PlatformPreview;
+
+#[cfg(target_os = "linux")]
+pub type NativeWindow = linux::NativeWindow;
+#[cfg(target_os = "linux")]
+type PlatformPreview = linux::PlatformPreview;
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 pub type NativeWindow = stub::NativeWindow;
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 type PlatformPreview = stub::PlatformPreview;
 
 pub struct PreviewPanel {

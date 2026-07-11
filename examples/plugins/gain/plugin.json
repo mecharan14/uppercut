@@ -1,0 +1,6 @@
+{
+  "id": "gain",
+  "name": "Gain",
+  "version": "1",
+  "wasm": "gain.wasm"
+}

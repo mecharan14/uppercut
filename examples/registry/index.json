@@ -1,0 +1,23 @@
+[
+  {
+    "id": "starter",
+    "kind": "pack",
+    "path": "../packs/starter",
+    "summary": "Neon caption style, punch LUT, star sticker, blip SFX",
+    "schema_version": 1
+  },
+  {
+    "id": "invert",
+    "kind": "plugin",
+    "path": "../plugins/invert",
+    "summary": "Invert RGB frame effect (template)",
+    "schema_version": 1
+  },
+  {
+    "id": "gain",
+    "kind": "plugin",
+    "path": "../plugins/gain",
+    "summary": "Audio gain: multiply PCM by intensity",
+    "schema_version": 1
+  }
+]

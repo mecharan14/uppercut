@@ -335,8 +335,10 @@ fn export_project_with_progress_inner(
     encoder.finish()?;
     drop(renderer);
 
-    let audio_clips = collect_audio_clips(project);
+    let mut audio_clips = collect_audio_clips(project);
+    let wasm_tmp = bake_wasm_audio_effects(project, &mut audio_clips)?;
     if audio_clips.is_empty() {
+        let _ = wasm_tmp;
         std::fs::rename(temp_video, output_path).or_else(|_| {
             std::fs::copy(temp_video, output_path).map_err(FfmpegCliError::Io)?;
             Ok::<(), FfmpegCliError>(())
@@ -349,18 +351,25 @@ fn export_project_with_progress_inner(
         frame: total_frames,
         total_frames,
     }) {
+        if let Some(d) = wasm_tmp {
+            std::fs::remove_dir_all(d).ok();
+        }
         return Err(ExportError::Cancelled);
     }
 
     let temp_audio = temp_dir.join("audio.wav");
     let duck = duck_settings(project);
-    mix_timeline_audio(
+    let mix_result = mix_timeline_audio(
         &audio_clips,
         project.settings.sample_rate,
         duration_secs,
         &temp_audio,
         duck,
-    )?;
+    );
+    if let Some(d) = wasm_tmp {
+        std::fs::remove_dir_all(d).ok();
+    }
+    mix_result?;
 
     if !on_progress(ExportProgress {
         phase: ExportPhase::Mux,
@@ -384,24 +393,177 @@ fn collect_audio_clips(project: &Project) -> Vec<AudioMixClip> {
             if !a.enabled {
                 continue;
             }
-            if let Some(media) = project.find_media(a.media_id) {
+            let Some(media) = project.find_media(a.media_id) else {
+                continue;
+            };
+            for (local_off, tl_dur, speed) in crate::project::anim::speed_segments(a) {
+                let src_in = a.source_time_at(a.position_secs + local_off);
+                let src_out = a.source_time_at(a.position_secs + local_off + tl_dur);
                 clips.push(AudioMixClip {
                     path: media.path.clone(),
-                    position_secs: a.position_secs,
-                    source_in_secs: a.source_in_secs,
-                    source_out_secs: a.source_out_secs,
-                    // Phase 3.1: honor Volume keyframes (evaluated at clip start for the
-                    // static FFmpeg volume filter; per-sample envelopes land later).
-                    gain_db: evaluate_volume_db(a, a.position_secs),
-                    fade_in_secs: a.fade_in_secs,
-                    fade_out_secs: a.fade_out_secs,
+                    position_secs: a.position_secs + local_off,
+                    source_in_secs: src_in,
+                    source_out_secs: src_out.max(src_in + 1e-4),
+                    gain_db: evaluate_volume_db(a, a.position_secs + local_off),
+                    fade_in_secs: if local_off < 1e-6 {
+                        a.fade_in_secs
+                    } else {
+                        0.0
+                    },
+                    fade_out_secs: if (local_off + tl_dur - a.timeline_duration_secs()).abs() < 0.06
+                    {
+                        a.fade_out_secs
+                    } else {
+                        0.0
+                    },
                     role: track.audio_role,
-                    speed: a.speed_factor(),
+                    speed,
+                    effects: a.effects.clone(),
                 });
             }
         }
     }
     clips
+}
+
+/// Decode clip source ranges, run audio WASM effects, rewrite clip paths to processed WAVs.
+fn bake_wasm_audio_effects(
+    project: &Project,
+    clips: &mut [AudioMixClip],
+) -> Result<Option<PathBuf>, ExportError> {
+    let needs = clips.iter().any(|c| {
+        c.effects
+            .iter()
+            .any(|e| e.enabled && e.effect_id.starts_with("wasm:"))
+    });
+    if !needs {
+        return Ok(None);
+    }
+    let host = crate::plugins::PluginHost::for_project(project)
+        .map_err(|e| ExportError::Ffmpeg(FfmpegCliError::BadOutput(e)))?;
+    let temp_dir =
+        std::env::temp_dir().join(format!("uppercut-wasm-audio-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp_dir).map_err(FfmpegCliError::Io)?;
+    let sample_rate = project.settings.sample_rate;
+    let ffmpeg = crate::media::ffmpeg_path()?;
+
+    for (i, clip) in clips.iter_mut().enumerate() {
+        let wasm_fx: Vec<_> = clip
+            .effects
+            .iter()
+            .filter(|e| e.enabled && e.effect_id.starts_with("wasm:"))
+            .cloned()
+            .collect();
+        if wasm_fx.is_empty() {
+            continue;
+        }
+        let has_audio_plugin = wasm_fx.iter().any(|e| {
+            e.effect_id
+                .strip_prefix("wasm:")
+                .map(|id| host.plugin_is_audio(id))
+                .unwrap_or(false)
+        });
+        if !has_audio_plugin {
+            continue;
+        }
+
+        let seg_dur = (clip.source_out_secs - clip.source_in_secs).max(1e-4);
+        let raw_path = temp_dir.join(format!("raw_{i}.f32"));
+        let wav_path = temp_dir.join(format!("proc_{i}.wav"));
+
+        let status = std::process::Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                &format!("{:.6}", clip.source_in_secs),
+                "-i",
+            ])
+            .arg(&clip.path)
+            .args([
+                "-t",
+                &format!("{seg_dur:.6}"),
+                "-f",
+                "f32le",
+                "-ac",
+                "2",
+                "-ar",
+                &sample_rate.to_string(),
+            ])
+            .arg(&raw_path)
+            .status()
+            .map_err(|e| {
+                ExportError::Ffmpeg(FfmpegCliError::SpawnFailed {
+                    tool: "ffmpeg",
+                    message: e.to_string(),
+                })
+            })?;
+        if !status.success() {
+            std::fs::remove_dir_all(&temp_dir).ok();
+            return Err(ExportError::Ffmpeg(FfmpegCliError::NonZeroExit(
+                status.code().unwrap_or(-1),
+            )));
+        }
+
+        let bytes = std::fs::read(&raw_path).map_err(FfmpegCliError::Io)?;
+        if bytes.len() % 4 != 0 {
+            std::fs::remove_dir_all(&temp_dir).ok();
+            return Err(ExportError::Ffmpeg(FfmpegCliError::BadOutput(
+                "odd f32le PCM length".into(),
+            )));
+        }
+        let mut samples: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        host.apply_audio_effects(&mut samples, sample_rate, 2, &wasm_fx)
+            .map_err(|e| ExportError::Ffmpeg(FfmpegCliError::BadOutput(e)))?;
+
+        let mut out_bytes = Vec::with_capacity(samples.len() * 4);
+        for s in &samples {
+            out_bytes.extend_from_slice(&s.to_le_bytes());
+        }
+        std::fs::write(&raw_path, &out_bytes).map_err(FfmpegCliError::Io)?;
+
+        let status = std::process::Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "f32le",
+                "-ar",
+                &sample_rate.to_string(),
+                "-ac",
+                "2",
+                "-i",
+            ])
+            .arg(&raw_path)
+            .arg(&wav_path)
+            .status()
+            .map_err(|e| {
+                ExportError::Ffmpeg(FfmpegCliError::SpawnFailed {
+                    tool: "ffmpeg",
+                    message: e.to_string(),
+                })
+            })?;
+        if !status.success() {
+            std::fs::remove_dir_all(&temp_dir).ok();
+            return Err(ExportError::Ffmpeg(FfmpegCliError::NonZeroExit(
+                status.code().unwrap_or(-1),
+            )));
+        }
+
+        clip.path = wav_path;
+        clip.source_in_secs = 0.0;
+        clip.source_out_secs = samples.len() as f64 / 2.0 / sample_rate as f64;
+        clip.effects.clear();
+    }
+
+    Ok(Some(temp_dir))
 }
 
 fn duck_settings(project: &Project) -> Option<DuckSettings> {
@@ -504,6 +666,7 @@ pub fn mix_timeline_audio_range_to_file(
                 fade_out_secs: a.fade_out_secs,
                 role: track.audio_role,
                 speed: a.speed_factor(),
+                effects: a.effects.clone(),
             });
         }
     }
@@ -511,14 +674,19 @@ pub fn mix_timeline_audio_range_to_file(
         return Ok(false);
     }
 
+    let wasm_tmp = bake_wasm_audio_effects(project, &mut shifted)?;
     let duck = duck_settings(project);
-    mix_timeline_audio(
+    let result = mix_timeline_audio(
         &shifted,
         project.settings.sample_rate,
         duration_secs,
         out_path,
         duck,
-    )?;
+    );
+    if let Some(d) = wasm_tmp {
+        std::fs::remove_dir_all(d).ok();
+    }
+    result?;
     Ok(true)
 }
 

@@ -1,6 +1,6 @@
 # Command API
 
-Status: **current** (matches project schema v4). This is the source of truth for the `Command` enum and
+Status: **current** (matches project schema v5). This is the source of truth for the `Command` enum and
 `apply_command` in `uppercut-core`. GUI, CLI, and MCP must all dispatch through this exact
 set (see AGENTS.md §0.1) — none of them may mutate `Project` state any other way.
 
@@ -36,6 +36,8 @@ pub enum Command {
     UnloadAssetPack { pack_id: String },
     LoadWasmPlugin { path: String },
     UnloadWasmPlugin { plugin_id: String },
+    AddStickerFromPack { pack_id: String, sticker_id: String, track_id: Id, position_secs: f64 },
+    AddSfxFromPack { pack_id: String, sfx_id: String, track_id: Id, position_secs: f64 },
     Export { output_path: String, preset: ExportPreset },
 }
 
@@ -235,15 +237,22 @@ Requires a following clip; duration must be `> 0` and ≤ half of each adjacent 
 - Errors: not a video track, no following clip, invalid duration.
 
 ### `SetClipSpeed` (Phase 3)
-Sets constant playback `speed` on a media clip (`0.25`..`4.0`). Timeline duration and
-source-time mapping update; audio uses pitch-preserving `atempo`. Rejects overlaps caused
-by a longer timeline span when slowing down.
+Sets constant base playback `speed` on a media clip (`0.25`..`4.0`) used when no Speed
+keyframes are present. Timeline duration and source-time mapping update; audio uses
+pitch-preserving `atempo`. Rejects overlaps caused by a longer timeline span when slowing
+down. Speed keyframes (`SetClipKeyframes` with `AnimProperty::Speed`) override via integral
+mapping (schema v5).
 
 ### `LoadAssetPack` / `UnloadAssetPack` (Phase 3)
 Load or unload a declarative pack directory (`pack.json`). Paths are stored on the project.
 
 ### `LoadWasmPlugin` / `UnloadWasmPlugin` (Phase 3)
-Load or unload a WASM frame-effect plugin directory (`plugin.json` + `.wasm`).
+Load or unload a WASM plugin directory (`plugin.json` + `.wasm`). Plugins may export frame
+`process` and/or audio `process_audio`.
+
+### `AddStickerFromPack` / `AddSfxFromPack` (Phase 3 deferred)
+Import a pack sticker (image → video track) or SFX (audio → audio track) and place a clip
+at `position_secs`. Requires the pack to be loaded.
 
 ### `Export`
 Renders the current `Project` timeline to `output_path` using `preset` (e.g.
@@ -273,8 +282,8 @@ command, which is sufficient for scripted/agent use.
 
 ## Non-goals (Phase 4+)
 
-Keyframed speed ramps, in-app pack/plugin browser, stickers/SFX packs, audio-only WASM
-effects, macOS/Linux native preview — see [project-schema.md](project-schema.md).
+Background removal, chroma, masks, tracking, stabilization, denoise, multi-cam, in-app
+remote marketplace with payments, custom pack WGSL shaders — see [project-schema.md](project-schema.md).
 
 ## Version history
 
@@ -293,6 +302,8 @@ effects, macOS/Linux native preview — see [project-schema.md](project-schema.m
 - **Phase 3.5** (project schema v3): added `SetClipTransition` (crossfade).
 - **Phase 3 close-out** (project schema v4): `SetClipSpeed`; ten transition kinds; glitch;
   `LoadAssetPack` / `UnloadAssetPack`; `LoadWasmPlugin` / `UnloadWasmPlugin`.
+- **Phase 3 deferred** (project schema v5): Speed keyframes; `AddStickerFromPack` /
+  `AddSfxFromPack`; audio WASM `process_audio`.
 
 - **Phase 3.4** (non-breaking): `SetClipEffects` validates known builtin ids + param
   clamps; compositor executes `builtin:color_adjust` / `blur` / `lut_contrast` / `lut_warm`.

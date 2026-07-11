@@ -97,11 +97,12 @@ Two rendering surfaces coexist in one window:
   lives in `styles/tokens.css` (charcoal surfaces, ember accent `#ff5a3d`, Source Sans 3)
   and `styles/globals.css`; UI glyphs are **lucide-react** (no emoji icons). Timeline
   canvas colors read the same CSS vars through `timeline/theme.ts`.
-- **Native preview surface** — a wgpu child HWND on Windows (Phase 2 v1), receiving
-  composited frames from the playback engine in `uppercut-core`. Never proxies frames
-  through the webview/JS bridge. Preview bounds are synced from `#preview-host`'s
-  letterboxed content rect (`set_preview_bounds`) so they stay aligned when the custom
-  titlebar height changes.
+- **Native preview surface** — a wgpu child native window (Win32 HWND, AppKit NSView, or
+  X11 child window) receiving composited frames from the playback engine in
+  `uppercut-core`. Never proxies frames through the webview/JS bridge. The surface is
+  click-through so overlay controls stay interactive. Preview bounds are synced from
+  `#preview-host`'s letterboxed content rect (`set_preview_bounds`) so they stay aligned
+  when the custom titlebar height changes. Linux/Wayland is not supported yet.
 
 **Timeline architecture:** the canvas timeline is deliberately *not* a React render
 target. `uppercut-app/src/timeline/renderer.ts` is a pure `(canvas, state) => void` draw
@@ -131,7 +132,8 @@ Phase 3), inspectors (video/audio clip with gain/fades/enable/trim, caption styl
 project canvas settings), Text panel auto-captions + Audio panel TTS voiceover, export
 dialog with progress bar / ETA / cancel (M6), M7 polish (Coming Soon panels, empty states,
 media skeletons, focus rings / scrollbars, `playback:error` toasts, pause-on-edit).
-Thumbnails/waveforms are M4. macOS/Linux preview surfaces land in Phase 3.
+Thumbnails/waveforms are M4. macOS/Linux native preview surfaces are implemented in
+Phase 3 (Linux requires X11; Wayland is deferred).
 
 Tauri commands: `quick_start_project`, `new_project`, `open_project`, `save_project`,
 `get_project`, `apply_command`, `apply_commands`, `undo`, `redo`, `export_project`,

@@ -86,10 +86,10 @@ Before considering a change complete:
 
 ## 4. Current phase
 
-Check PLAN.md §4 for the phase roadmap. **Phase 3 is complete** (1A/2A scope): schema v4
-(`speed`, ten WGSL transitions, glitch), asset packs, WASM frame-effect host v1, example
-pack/plugin + registry seed, macOS/Linux CI. Native preview remains Windows-first.
-**Phase 4** (parity march: masks, chroma, tracking, etc.) is next.
+Check PLAN.md §4 for the phase roadmap. **Phase 3 deferred items are complete** (schema v5
+speed ramps, stickers/SFX packs, audio WASM, in-app Extensions + registry index, native
+preview on Windows/macOS/Linux-X11). **Phase 4** (parity march: masks, chroma, tracking,
+etc.) is next.
 
 ## 5. When in doubt
 

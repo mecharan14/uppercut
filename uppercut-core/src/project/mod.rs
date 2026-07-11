@@ -7,13 +7,16 @@ use std::path::PathBuf;
 
 pub mod anim;
 
-pub use anim::{evaluate_transform, evaluate_volume_db};
+pub use anim::{
+    evaluate_speed, evaluate_transform, evaluate_volume_db, integrate_speed, source_time_at,
+    timeline_duration_secs,
+};
 
 pub type Id = uuid::Uuid;
 
-/// Current on-disk schema. Loaders accept `1`..=`4` (older files get serde defaults for
-/// new fields); new projects and saves write `4`.
-pub const SCHEMA_VERSION: u32 = 4;
+/// Current on-disk schema. Loaders accept `1`..=`5` (older files get serde defaults for
+/// new fields); new projects and saves write `5`.
+pub const SCHEMA_VERSION: u32 = 5;
 pub const MIN_LOADABLE_SCHEMA_VERSION: u32 = 1;
 
 /// Clamp / sanitize clip playback speed (Phase 3).
@@ -290,6 +293,8 @@ pub enum AnimProperty {
     Rotation,
     Opacity,
     Volume,
+    /// Playback rate over clip-local timeline time (Phase 3 deferred / schema v5).
+    Speed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -463,15 +468,19 @@ impl MediaClip {
         clamp_clip_speed(self.speed)
     }
 
-    /// Timeline span occupied by this clip.
+    /// Timeline span occupied by this clip (honors Speed keyframes when present).
     pub fn timeline_duration_secs(&self) -> f64 {
-        let src = (self.source_out_secs - self.source_in_secs).max(0.0);
-        src / self.speed_factor()
+        anim::timeline_duration_secs(self)
     }
 
     /// Media source time corresponding to absolute timeline time `t`.
     pub fn source_time_at(&self, t: f64) -> f64 {
-        self.source_in_secs + (t - self.position_secs) * self.speed_factor()
+        anim::source_time_at(self, t)
+    }
+
+    /// Instantaneous speed at absolute timeline time `t`.
+    pub fn speed_at(&self, t: f64) -> f64 {
+        anim::evaluate_speed(self, t)
     }
 }
 

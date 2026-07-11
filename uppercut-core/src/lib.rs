@@ -27,5 +27,5 @@ pub use perceive::{
     audio_peaks, detect_scenes, detect_silence, transcribe_media, AnalysisError, AudioPeaks,
     PerceiveError, SceneCut, SilenceSpan, Transcript, TranscriptSegment,
 };
-pub use plugins::{compile_invert_wasm, PluginHost};
+pub use plugins::{compile_gain_wasm, compile_invert_wasm, PluginHost};
 pub use project::Project;

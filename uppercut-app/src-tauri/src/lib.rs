@@ -176,7 +176,7 @@ impl AppState {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 fn native_window_from_app(app: &AppHandle) -> Result<NativeWindow, String> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -187,14 +187,29 @@ fn native_window_from_app(app: &AppHandle) -> Result<NativeWindow, String> {
         .window_handle()
         .map_err(|e| format!("window handle: {e}"))?;
     match handle.as_raw() {
+        #[cfg(windows)]
         RawWindowHandle::Win32(h) => Ok(NativeWindow { hwnd: h.hwnd.get() }),
+        #[cfg(target_os = "macos")]
+        RawWindowHandle::AppKit(h) => Ok(NativeWindow {
+            ns_view: h.ns_view.as_ptr() as usize,
+        }),
+        #[cfg(target_os = "linux")]
+        RawWindowHandle::Xlib(h) => Ok(NativeWindow {
+            display: h.display.as_ptr().cast(),
+            window: h.window.get(),
+        }),
+        #[cfg(target_os = "linux")]
+        other => Err(format!(
+            "native preview requires X11 (Wayland not supported yet): {other:?}"
+        )),
+        #[cfg(not(target_os = "linux"))]
         other => Err(format!("unsupported window handle: {other:?}")),
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn native_window_from_app(_app: &AppHandle) -> Result<NativeWindow, String> {
-    Err("native preview requires Windows in Phase 2 v1".into())
+    Err("native preview is not supported on this platform".into())
 }
 
 fn ensure_preview_parent(app: &AppHandle, state: &AppState) -> Result<(), String> {
@@ -205,7 +220,7 @@ fn ensure_preview_parent(app: &AppHandle, state: &AppState) -> Result<(), String
     let parent = native_window_from_app(app).inspect_err(|e| {
         eprintln!("preview: failed to attach parent window: {e}");
     })?;
-    eprintln!("preview: attached parent hwnd {}", parent.hwnd);
+    eprintln!("preview: attached parent window {parent:?}");
     state.preview.lock().attach_parent(parent);
     *attached = true;
     Ok(())
@@ -417,6 +432,183 @@ async fn get_media_assets(
             .ok_or_else(|| format!("media not found: {media_id}"))
     })?;
     media_assets::get_cached(&app, &media_id, &path)
+}
+
+#[derive(Clone, serde::Serialize)]
+struct PackStickerInfo {
+    id: String,
+    label: String,
+    default_duration_secs: f64,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct PackSfxInfo {
+    id: String,
+    label: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct PackLutInfo {
+    id: String,
+    label: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct PackTransitionInfo {
+    id: String,
+    label: String,
+    kind: String,
+    default_duration_secs: f64,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct LoadedPackInfo {
+    id: String,
+    name: String,
+    path: String,
+    stickers: Vec<PackStickerInfo>,
+    sfx: Vec<PackSfxInfo>,
+    luts: Vec<PackLutInfo>,
+    transitions: Vec<PackTransitionInfo>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct LoadedPluginInfo {
+    id: String,
+    name: String,
+    path: String,
+    has_frame: bool,
+    has_audio: bool,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ExtensionCatalog {
+    packs: Vec<LoadedPackInfo>,
+    plugins: Vec<LoadedPluginInfo>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct RegistryEntry {
+    id: String,
+    kind: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    git_url: Option<String>,
+    summary: String,
+    schema_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resolved_path: Option<String>,
+}
+
+#[tauri::command]
+async fn list_extensions(state: State<'_, AppState>) -> Result<ExtensionCatalog, String> {
+    let project = state.with_session(|s| Ok(s.project.clone()))?;
+    let packs = uppercut_core::packs::load_project_packs(&project)
+        .into_iter()
+        .map(|p| LoadedPackInfo {
+            id: p.manifest.id.clone(),
+            name: p.manifest.name.clone(),
+            path: p.root.display().to_string(),
+            stickers: p
+                .manifest
+                .stickers
+                .iter()
+                .map(|s| PackStickerInfo {
+                    id: s.id.clone(),
+                    label: s.label.clone(),
+                    default_duration_secs: s.default_duration_secs,
+                })
+                .collect(),
+            sfx: p
+                .manifest
+                .sfx
+                .iter()
+                .map(|s| PackSfxInfo {
+                    id: s.id.clone(),
+                    label: s.label.clone(),
+                })
+                .collect(),
+            luts: p
+                .manifest
+                .luts
+                .iter()
+                .map(|l| PackLutInfo {
+                    id: l.id.clone(),
+                    label: l.label.clone(),
+                })
+                .collect(),
+            transitions: p
+                .manifest
+                .transitions
+                .iter()
+                .map(|t| PackTransitionInfo {
+                    id: t.id.clone(),
+                    label: t.label.clone(),
+                    kind: t.kind.clone(),
+                    default_duration_secs: t.default_duration_secs,
+                })
+                .collect(),
+        })
+        .collect();
+
+    let mut plugins = Vec::new();
+    for path in &project.wasm_plugin_paths {
+        let Ok(manifest) = uppercut_core::plugins::load_plugin_manifest(path) else {
+            continue;
+        };
+        let caps = uppercut_core::plugins::plugin_capabilities(path).unwrap_or_default();
+        plugins.push(LoadedPluginInfo {
+            id: manifest.id,
+            name: manifest.name,
+            path: path.display().to_string(),
+            has_frame: caps.has_frame,
+            has_audio: caps.has_audio,
+        });
+    }
+
+    Ok(ExtensionCatalog { packs, plugins })
+}
+
+#[tauri::command]
+async fn list_registry() -> Result<Vec<RegistryEntry>, String> {
+    // Prefer repo-relative seed when running from a checkout; otherwise empty.
+    let candidates = [
+        std::path::PathBuf::from("examples/registry/index.json"),
+        std::path::PathBuf::from("../examples/registry/index.json"),
+        std::path::PathBuf::from("../../examples/registry/index.json"),
+    ];
+    let mut path = None;
+    for c in &candidates {
+        if c.is_file() {
+            path = Some(c.clone());
+            break;
+        }
+    }
+    let Some(index_path) = path else {
+        return Ok(Vec::new());
+    };
+    let text = std::fs::read_to_string(&index_path).map_err(|e| e.to_string())?;
+    let mut entries: Vec<RegistryEntry> =
+        serde_json::from_str(&text).map_err(|e| format!("registry index: {e}"))?;
+    let base = index_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    for entry in &mut entries {
+        if let Some(rel) = &entry.path {
+            let resolved = base.join(rel);
+            if resolved.exists() {
+                entry.resolved_path = Some(
+                    resolved
+                        .canonicalize()
+                        .unwrap_or(resolved)
+                        .display()
+                        .to_string(),
+                );
+            }
+        }
+    }
+    Ok(entries)
 }
 
 #[tauri::command]
@@ -804,6 +996,8 @@ pub fn run() {
             scrub_audio,
             request_media_assets,
             get_media_assets,
+            list_extensions,
+            list_registry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Uppercut");

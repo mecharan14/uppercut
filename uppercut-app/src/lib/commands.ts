@@ -218,6 +218,36 @@ export function unloadWasmPlugin(pluginId: string) {
   return { command: "UnloadWasmPlugin", plugin_id: pluginId };
 }
 
+export function addStickerFromPack(
+  packId: string,
+  stickerId: string,
+  trackId: string,
+  positionSecs: number,
+) {
+  return {
+    command: "AddStickerFromPack",
+    pack_id: packId,
+    sticker_id: stickerId,
+    track_id: trackId,
+    position_secs: positionSecs,
+  };
+}
+
+export function addSfxFromPack(
+  packId: string,
+  sfxId: string,
+  trackId: string,
+  positionSecs: number,
+) {
+  return {
+    command: "AddSfxFromPack",
+    pack_id: packId,
+    sfx_id: sfxId,
+    track_id: trackId,
+    position_secs: positionSecs,
+  };
+}
+
 export function generateCaptions(
   mediaId: string,
   trackId: string,
