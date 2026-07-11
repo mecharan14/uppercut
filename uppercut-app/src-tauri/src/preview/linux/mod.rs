@@ -19,8 +19,8 @@ pub enum NativeWindow {
 
 pub enum PlatformPreview {
     Unattached,
-    X11(x11::Preview),
-    Wayland(wayland::Preview),
+    X11(Box<x11::Preview>),
+    Wayland(Box<wayland::Preview>),
 }
 
 impl PlatformPreview {
@@ -31,11 +31,11 @@ impl PlatformPreview {
     pub fn attach_parent(&mut self, parent: NativeWindow) {
         *self = match parent {
             NativeWindow::X11 { display, window } => {
-                Self::X11(x11::Preview::new(x11::Parent { display, window }))
+                Self::X11(Box::new(x11::Preview::new(x11::Parent { display, window })))
             }
-            NativeWindow::Wayland { display, surface } => {
-                Self::Wayland(wayland::Preview::new(wayland::Parent { display, surface }))
-            }
+            NativeWindow::Wayland { display, surface } => Self::Wayland(Box::new(
+                wayland::Preview::new(wayland::Parent { display, surface }),
+            )),
         };
     }
 
