@@ -1,4 +1,4 @@
-# Project schema — v3
+# Project schema — v4
 
 Status: **current**. This is the source of truth for `uppercut-core`'s project
 model. Implementation types in `uppercut-core/src/project/` must match this document; if
@@ -12,7 +12,7 @@ extension `.uppercut.json`.
 
 ```jsonc
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "id": "b3f1c2a0-...-uuid",
   "name": "ultra-bruno-ep12",
   "settings": {
@@ -23,196 +23,56 @@ extension `.uppercut.json`.
     "duck_db": -12.0
   },
   "media": [ /* MediaItem[] */ ],
-  "tracks": [ /* Track[] */ ]
+  "tracks": [ /* Track[] */ ],
+  "asset_pack_paths": [],   // optional; directories containing pack.json
+  "wasm_plugin_paths": []   // optional; directories containing plugin.json
 }
 ```
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | u32 | `3` for this spec. Loaders accept `1`..=`3` (`MIN_LOADABLE_SCHEMA_VERSION = 1`); reject unknown newer versions rather than guess. Saves always write `3`. |
+| `schema_version` | u32 | `4` for this spec. Loaders accept `1`..=`4`; saves write `4`. |
 | `id` | string (UUIDv4) | Stable project identity, generated on creation. |
 | `name` | string | Human-facing project name; not used for file paths. |
-| `settings.fps` | f64 | Timeline/output frame rate. |
-| `settings.width`, `settings.height` | u32 | Output resolution in pixels (e.g. 1080×1920 for TikTok). |
-| `settings.sample_rate` | u32 | Audio sample rate in Hz (e.g. 48000). |
-| `settings.duck_db` | f64 | Music ducking under voice/dialog during export (dB). Default −12; `0` disables ducking. |
-| `media` | MediaItem[] | Pool of imported source files, referenced by id from clips. |
-| `tracks` | Track[] | Ordered list, index = stacking/mix order (video: top track drawn last/on top; audio: all tracks mixed; captions: rendered above video). |
+| `settings.*` | — | Same as v3 (`fps`, `width`, `height`, `sample_rate`, `duck_db`). |
+| `media` | MediaItem[] | Pool of imported source files. |
+| `tracks` | Track[] | Ordered list (video / audio / caption). |
+| `asset_pack_paths` | path[] | Loaded asset-pack roots (see [asset-pack.md](asset-pack.md)). |
+| `wasm_plugin_paths` | path[] | Loaded WASM plugin roots (see [plugin-api.md](plugin-api.md)). |
 
-## MediaItem
+## MediaClip (selected fields)
 
-```jsonc
-{
-  "id": "media-uuid",
-  "path": "C:/footage/round1_raw.mp4",
-  "kind": "video",            // "video" | "audio" | "image"
-  "duration_secs": 184.5,      // null if the prober doesn't support this format yet
-  "width": 1920,                // null if unknown, present for video/image
-  "height": 1080,               // null if unknown, present for video/image
-  "fps": 60.0                    // null if unknown, present for video
-}
-```
-
-Paths are stored as given at import time (absolute, or relative to the project file's
-directory — decide and enforce one convention when `ImportMedia` is implemented; recommend
-relative-to-project for portability). Probing (duration/dimensions/fps) happens once at
-import via `uppercut-core::media::probe` and is cached here rather than re-probed on load.
-
-`duration_secs`/`width`/`height`/`fps` are **nullable**: v0's prober covers a growing set of
-formats without requiring a system FFmpeg install (see `uppercut-core/src/media/mod.rs` for
-current coverage — WAV today, more as the Phase 0 media spine work lands). Commands that
-need bounds against media duration (e.g. `AddClip`) skip that validation when the value is
-`None` rather than failing — see command-api.md.
-
-## Track
-
-```jsonc
-{
-  "id": "track-uuid",
-  "kind": "video",             // "video" | "audio" | "caption"
-  "name": "Gameplay A",
-  "audio_role": "music",       // optional on audio tracks: voiceover | dialog | music | ambience
-  "muted": false,               // v1: excluded from the audio mix on export/playback
-  "locked": false,              // v1: GUI-honored only, see note below
-  "hidden": false,               // v1: excluded from composited video/burned-in caption layers
-  "clips": [ /* Clip[], see below — shape depends on track kind */ ]
-}
-```
-
-Clips within a track are not required to be pre-sorted in the JSON; consumers sort by
-`position_secs` on load. Clips within a single track must not overlap (enforced by
-`apply_command`, not by the schema itself).
-
-`muted`/`locked`/`hidden` default to `false` and are omittable in v0 project files (loaded
-via `#[serde(default)]`, no migration step needed). `muted` and `hidden` are enforced by
-the engine itself (export and the playback engine both skip muted/hidden tracks — see
-`uppercut-core/src/export/mod.rs`). `locked` is **GUI-honored only**: `apply_command`
-deliberately does not reject edits to a locked track, so CLI/MCP agents can still edit it;
-the GUI's timeline interactions are responsible for refusing mouse edits when it's set.
-
-## Clip variants
-
-`Clip` is a tagged union on an implicit `type` discriminant matching the track kind it
-lives in. (Rust: an enum `Clip { Video(VideoClip), Audio(AudioClip), Caption(CaptionClip) }`,
-serialized with `#[serde(tag = "type")]`.)
-
-### VideoClip / AudioClip (media-backed)
-
-```jsonc
-{
-  "type": "video",             // or "audio"
-  "id": "clip-uuid",
-  "media_id": "media-uuid",
-  "position_secs": 12.0,        // where this clip starts on the timeline
-  "source_in_secs": 3.5,        // in-point within the source media
-  "source_out_secs": 9.0,       // out-point within the source media
-  "gain_db": 0.0,               // audio gain (dB); Volume keyframes override when present
-  "fade_in_secs": 0.0,          // audio export fade-in (Phase 1)
-  "fade_out_secs": 0.0,         // audio export fade-out (Phase 1)
-  "enabled": true,              // soft-disable without deleting
-  "transform": {                // Phase 3.1 — static spatial + opacity (defaults = identity)
-    "x": 0.0,                   // NDC offset from canvas center (−1..1 ≈ left/right)
-    "y": 0.0,
-    "scale_x": 1.0,             // 1.0 = cover-fit size after aspect crop
-    "scale_y": 1.0,
-    "rotation_deg": 0.0,
-    "opacity": 1.0              // 0..1
-  },
-  "keyframes": [],              // Phase 3.1 — KeyframeTrack[] (see below)
-  "effects": [],                // Phase 3.4 — EffectInstance[] (builtin shaders executed)
-  "outgoing_transition": null   // Phase 3.5 — optional ClipTransition (video tracks)
-}
-```
-
-Duration on the timeline = `source_out_secs - source_in_secs`. Speed ramping is out of
-scope for v0 (Phase 4 feature) — no `speed` field yet; add one only when that feature is
-implemented, not preemptively.
-
-#### KeyframeTrack / Keyframe (Phase 3.1)
-
-```jsonc
-{
-  "property": "opacity",   // pos_x | pos_y | scale_x | scale_y | rotation | opacity | volume
-  "keys": [
-    { "time_secs": 0.0, "value": 1.0, "easing": "linear" },  // time relative to clip start
-    { "time_secs": 2.0, "value": 0.0, "easing": "ease_in_out" }
-  ]
-}
-```
-
-`easing` defaults to `linear` (`ease_in` | `ease_out` | `ease_in_out`). At most one track
-per `property`. Keys are sorted by `time_secs` on write. `Volume` keyframe values are
-absolute dB and replace static `gain_db` when present. Evaluation: `evaluate_transform` /
-`evaluate_volume_db` in `uppercut-core` (playback + export share the same path).
-
-#### EffectInstance (Phase 3.4 builtins)
-
-```jsonc
-{
-  "id": "effect-instance-uuid",
-  "effect_id": "builtin:blur",   // see builtin list below
-  "enabled": true,
-  "params": { "radius": 4.0 }
-}
-```
-
-Round-trips in JSON and survives `SplitClip` (right half gets fresh instance ids). The
-compositor executes enabled builtins (Phase 3.4):
-
-| `effect_id` | Params (defaults) |
+| Field | Notes |
 |---|---|
-| `builtin:color_adjust` | `exposure` (0), `contrast` (1), `saturation` (1) |
-| `builtin:blur` | `radius` px (0); separable Gaussian, two passes |
-| `builtin:lut_contrast` | `intensity` (1); embedded S-curve grade |
-| `builtin:lut_warm` | `intensity` (1); embedded warm color matrix |
+| `source_in_secs` / `source_out_secs` | Source media range. |
+| `speed` | Playback rate (default `1.0`, clamp `0.25`..`4.0`). Timeline duration = `(source_out − source_in) / speed`. Source time = `source_in + (t − position) * speed`. Pitch-preserving audio via FFmpeg `atempo`. |
+| `transform` / `keyframes` / `effects` | Phase 3.1–3.4. |
+| `outgoing_transition` | Optional `ClipTransition` (video tracks). |
 
-No external `.cube` LUT files. Unknown `effect_id`s are rejected by `SetClipEffects`.
-Discover ids via `uppercut_core::compose::builtin_effect_ids()`.
+### Builtin effects
 
-#### ClipTransition (Phase 3.5)
+| `effect_id` | Params |
+|---|---|
+| `builtin:color_adjust` | `exposure`, `contrast`, `saturation` |
+| `builtin:blur` | `radius` |
+| `builtin:lut_contrast` / `builtin:lut_warm` | `intensity` |
+| `builtin:glitch` | `intensity`, `slice` |
 
-```jsonc
-{
-  "kind": "crossfade",
-  "duration_secs": 0.5
-}
-```
+Pack LUTs: `pack:<pack_id>:lut:<lut_id>`. WASM: `wasm:<plugin_id>` when loaded.
 
-Optional on media clips as `outgoing_transition`. Timeline clips stay non-overlapping; during
-`[cut - d, cut)` the renderer decodes both adjacent clips and blends opacities. Duration
-must be `> 0` and ≤ half of each adjacent clip. Video tracks only in 3.5.
+### ClipTransition
 
-### CaptionClip
+`kind` is one of: `crossfade`, `fade_black`, `wipe_left`, `wipe_right`, `wipe_up`,
+`wipe_down`, `slide_left`, `slide_right`, `iris`, `blur_dissolve`, plus `duration_secs`.
+Renderer dual-decodes during `[cut − d, cut)` and blends via WGSL (`transition.wgsl`).
 
-```jsonc
-{
-  "type": "caption",
-  "id": "clip-uuid",
-  "text": "he just does NOT miss",
-  "position_secs": 12.0,
-  "duration_secs": 2.2,
-  "style_id": "tiktok-bold-yellow"   // references a built-in or asset-pack style; free-text id, no inline styling in v0
-}
-```
+## What's intentionally not in v4 yet
 
-Word-level timing (for word-by-word highlight caption styles) is deliberately deferred:
-v0 captions are line-level. Add a `words: [{ text, start_offset_secs, end_offset_secs }]`
-field in a later schema version once the caption renderer needs it — don't add it unused.
-
-## What's intentionally not in v3 yet
-
-WASM plugin host, asset packs, community registry, additional transition kinds (wipe/slide),
-macOS/Linux native preview, and multi-cam are later milestones (PLAN.md §4).
+Keyframed speed ramps, macOS/Linux native preview, in-app pack/plugin browser, stickers/SFX
+packs, audio-only WASM effects (Phase 4 / later).
 
 ## Version history
 
-- **v0** (Phase 0): initial shape above — media pool, video/audio/caption tracks,
-  line-level captions, no effects/transitions/keyframes.
-- **v0 + Phase 1** (non-breaking): `Track.audio_role`, `MediaClip.fade_in_secs` /
-  `fade_out_secs`, `Settings.duck_db`.
-- **v1** (GUI rebuild M1, non-breaking): `Track.muted` / `locked` / `hidden`. v0 files
-  load unchanged (fields default to `false`); no migration required.
-- **v2** (Phase 3.1 foundation): `MediaClip.transform`, `keyframes`, `effects`. v1 files
-  load with identity/empty defaults via `#[serde(default)]`; saves write `schema_version: 2`.
-- **v3** (Phase 3.5): `MediaClip.outgoing_transition` (`ClipTransition`). Older files load
-  with `null`; saves write `schema_version: 3`.
+- **v0–v3**: see prior history (keyframes/effects in v2; `outgoing_transition` in v3).
+- **v4** (Phase 3 close-out): `MediaClip.speed`; ten transition kinds; glitch; project
+  `asset_pack_paths` / `wasm_plugin_paths`. Older files load with defaults.

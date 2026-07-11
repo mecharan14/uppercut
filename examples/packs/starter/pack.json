@@ -1,0 +1,31 @@
+{
+  "id": "starter",
+  "name": "Starter Pack",
+  "version": "1",
+  "caption_styles": [
+    {
+      "id": "starter-neon",
+      "label": "Neon bottom",
+      "font_scale": 0.055,
+      "fill_rgba": [0, 255, 200, 255],
+      "stroke_rgba": [0, 0, 0, 255],
+      "stroke_width": 2,
+      "anchor": "bottom"
+    }
+  ],
+  "luts": [
+    {
+      "id": "punch",
+      "label": "Punch",
+      "path": "luts/punch.cube"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "quick-wipe",
+      "label": "Quick wipe",
+      "kind": "wipe_left",
+      "default_duration_secs": 0.35
+    }
+  ]
+}

@@ -16,6 +16,7 @@ pub const BUILTIN_EFFECT_IDS: &[&str] = &[
     "builtin:blur",
     "builtin:lut_contrast",
     "builtin:lut_warm",
+    "builtin:glitch",
 ];
 
 /// Public list of builtin effect ids for GUI / CLI discovery.
@@ -42,6 +43,10 @@ pub fn default_params(effect_id: &str) -> BTreeMap<String, f64> {
         "builtin:lut_contrast" | "builtin:lut_warm" => {
             m.insert("intensity".into(), 1.0);
         }
+        "builtin:glitch" => {
+            m.insert("intensity".into(), 0.5);
+            m.insert("slice".into(), 0.5);
+        }
         _ => {}
     }
     m
@@ -56,6 +61,8 @@ pub fn clamp_effect_params(effect_id: &str, params: &mut BTreeMap<String, f64>) 
             ("builtin:color_adjust", "saturation") => v.clamp(0.0, 4.0),
             ("builtin:blur", "radius") => v.clamp(0.0, 64.0),
             ("builtin:lut_contrast" | "builtin:lut_warm", "intensity") => v.clamp(0.0, 1.0),
+            ("builtin:glitch", "intensity") => v.clamp(0.0, 1.0),
+            ("builtin:glitch", "slice") => v.clamp(0.0, 1.0),
             _ => *v,
         };
     }
@@ -95,10 +102,20 @@ struct LutUniform {
     _pad1: f32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GlitchUniform {
+    intensity: f32,
+    slice: f32,
+    time_seed: f32,
+    _pad: f32,
+}
+
 enum EffectKind {
     ColorAdjust,
     Blur,
     Lut,
+    Glitch,
 }
 
 struct PingPongRt {
@@ -116,6 +133,7 @@ pub struct EffectProcessor {
     color_adjust_pipeline: wgpu::RenderPipeline,
     blur_pipeline: wgpu::RenderPipeline,
     lut_pipeline: wgpu::RenderPipeline,
+    glitch_pipeline: wgpu::RenderPipeline,
     ping: Option<PingPongRt>,
     pong: Option<PingPongRt>,
     /// After a successful write, index of the RT holding the result (0=ping, 1=pong).
@@ -182,6 +200,12 @@ impl EffectProcessor {
             make_effect_pipeline(device, &pipeline_layout, "blur", include_str!("blur.wgsl"));
         let lut_pipeline =
             make_effect_pipeline(device, &pipeline_layout, "lut", include_str!("lut.wgsl"));
+        let glitch_pipeline = make_effect_pipeline(
+            device,
+            &pipeline_layout,
+            "glitch",
+            include_str!("glitch.wgsl"),
+        );
 
         Self {
             sampler,
@@ -189,6 +213,7 @@ impl EffectProcessor {
             color_adjust_pipeline,
             blur_pipeline,
             lut_pipeline,
+            glitch_pipeline,
             ping: None,
             pong: None,
             result_slot: 0,
@@ -318,6 +343,28 @@ impl EffectProcessor {
                     read_src = false;
                     wrote = true;
                 }
+                "builtin:glitch" => {
+                    let intensity = param_or(&effect.params, "intensity", 0.5) as f32;
+                    if intensity <= 0.001 {
+                        continue;
+                    }
+                    let u = GlitchUniform {
+                        intensity,
+                        slice: param_or(&effect.params, "slice", 0.5) as f32,
+                        time_seed: param_or(&effect.params, "seed", 0.0) as f32,
+                        _pad: 0.0,
+                    };
+                    self.draw_pass(
+                        device,
+                        encoder,
+                        src_view,
+                        read_src,
+                        EffectKind::Glitch,
+                        bytemuck::bytes_of(&u),
+                    )?;
+                    read_src = false;
+                    wrote = true;
+                }
                 _ => continue,
             }
         }
@@ -349,6 +396,7 @@ impl EffectProcessor {
             EffectKind::ColorAdjust => &self.color_adjust_pipeline,
             EffectKind::Blur => &self.blur_pipeline,
             EffectKind::Lut => &self.lut_pipeline,
+            EffectKind::Glitch => &self.glitch_pipeline,
         };
 
         let bind_group = {

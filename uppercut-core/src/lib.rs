@@ -8,7 +8,9 @@ pub mod commands;
 pub mod compose;
 pub mod export;
 pub mod media;
+pub mod packs;
 pub mod perceive;
+pub mod plugins;
 pub mod project;
 
 pub use audio::{TtsError, VoiceoverProvider};
@@ -20,8 +22,10 @@ pub use export::{
     ExportPhase, ExportProgress, ExportSettings, FrameRenderer,
 };
 pub use media::{generate_thumbnail_strip, ReaderOptions, ThumbnailStrip};
+pub use packs::{load_pack, LoadedPack};
 pub use perceive::{
     audio_peaks, detect_scenes, detect_silence, transcribe_media, AnalysisError, AudioPeaks,
     PerceiveError, SceneCut, SilenceSpan, Transcript, TranscriptSegment,
 };
+pub use plugins::{compile_invert_wasm, PluginHost};
 pub use project::Project;

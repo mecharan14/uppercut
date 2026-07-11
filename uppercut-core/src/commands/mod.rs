@@ -161,6 +161,28 @@ pub enum Command {
         clip_id: Id,
         transition: Option<ClipTransition>,
     },
+    /// Constant clip playback speed (Phase 3). Timeline duration = source span / speed.
+    SetClipSpeed {
+        track_id: Id,
+        clip_id: Id,
+        speed: f64,
+    },
+    /// Load a declarative asset pack from a directory containing `pack.json`.
+    LoadAssetPack {
+        path: String,
+    },
+    /// Unload a previously loaded asset pack by id.
+    UnloadAssetPack {
+        pack_id: String,
+    },
+    /// Load a WASM frame-effect plugin (directory with `plugin.json` + `.wasm`).
+    LoadWasmPlugin {
+        path: String,
+    },
+    /// Unload a WASM plugin by id.
+    UnloadWasmPlugin {
+        plugin_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,6 +260,12 @@ pub enum CommandError {
     InvalidEffects(String),
     #[error("invalid transition: {0}")]
     InvalidTransition(String),
+    #[error("invalid speed: {0}")]
+    InvalidSpeed(String),
+    #[error("asset pack error: {0}")]
+    AssetPack(String),
+    #[error("wasm plugin error: {0}")]
+    WasmPlugin(String),
     #[error("not yet implemented: {0}")]
     NotImplemented(&'static str),
 }
@@ -392,6 +420,15 @@ pub fn apply_command(project: &mut Project, cmd: Command) -> Result<CommandOutco
             clip_id,
             transition,
         } => set_clip_transition(project, track_id, clip_id, transition),
+        Command::SetClipSpeed {
+            track_id,
+            clip_id,
+            speed,
+        } => set_clip_speed(project, track_id, clip_id, speed),
+        Command::LoadAssetPack { path } => load_asset_pack(project, &path),
+        Command::UnloadAssetPack { pack_id } => unload_asset_pack(project, &pack_id),
+        Command::LoadWasmPlugin { path } => load_wasm_plugin(project, &path),
+        Command::UnloadWasmPlugin { plugin_id } => unload_wasm_plugin(project, &plugin_id),
     }
 }
 
@@ -1177,8 +1214,14 @@ fn validate_keyframes(tracks: Vec<KeyframeTrack>) -> Result<Vec<KeyframeTrack>, 
     Ok(out)
 }
 
-fn validate_effects(effects: Vec<EffectInstance>) -> Result<Vec<EffectInstance>, CommandError> {
+fn validate_effects(
+    project: &Project,
+    effects: Vec<EffectInstance>,
+) -> Result<Vec<EffectInstance>, CommandError> {
     use crate::compose::effects::{clamp_effect_params, is_builtin_effect_id};
+
+    let pack_effect_ids = crate::packs::known_effect_ids(project);
+    let wasm_effect_ids = crate::plugins::known_effect_ids(project);
 
     let mut ids = std::collections::HashSet::new();
     let mut out = Vec::with_capacity(effects.len());
@@ -1186,7 +1229,10 @@ fn validate_effects(effects: Vec<EffectInstance>) -> Result<Vec<EffectInstance>,
         if effect.effect_id.trim().is_empty() {
             return Err(CommandError::InvalidEffects("empty effect_id".into()));
         }
-        if !is_builtin_effect_id(&effect.effect_id) {
+        let known = is_builtin_effect_id(&effect.effect_id)
+            || pack_effect_ids.contains(&effect.effect_id)
+            || wasm_effect_ids.contains(&effect.effect_id);
+        if !known {
             return Err(CommandError::InvalidEffects(format!(
                 "unknown effect_id '{}'",
                 effect.effect_id
@@ -1241,7 +1287,7 @@ fn set_clip_effects(
     clip_id: Id,
     effects: Vec<EffectInstance>,
 ) -> Result<CommandOutcome, CommandError> {
-    let effects = validate_effects(effects)?;
+    let effects = validate_effects(project, effects)?;
     let clip = media_clip_mut(project, track_id, clip_id)?;
     clip.effects = effects;
     Ok(CommandOutcome::Applied)
@@ -1264,9 +1310,9 @@ fn set_clip_transition(
     }
 
     if let Some(ref t) = transition {
-        if !matches!(t.kind, TransitionKind::Crossfade) {
+        if !TransitionKind::ALL.contains(&t.kind) {
             return Err(CommandError::InvalidTransition(
-                "only crossfade is supported".into(),
+                "unsupported transition kind".into(),
             ));
         }
         if !t.duration_secs.is_finite() || t.duration_secs <= 0.0 {
@@ -1285,7 +1331,7 @@ fn set_clip_transition(
             .ok_or(CommandError::ClipNotFound(clip_id, track_id))?
             .as_media()
             .ok_or(CommandError::NotMediaClip(clip_id))?;
-        let clip_dur = clip.source_out_secs - clip.source_in_secs;
+        let clip_dur = clip.timeline_duration_secs();
         if t.duration_secs > clip_dur / 2.0 + 1e-9 {
             return Err(CommandError::InvalidTransition(
                 "duration must be <= half the clip duration".into(),
@@ -1308,7 +1354,7 @@ fn set_clip_transition(
                 "no following clip on this track".into(),
             ));
         };
-        let next_dur = next.source_out_secs - next.source_in_secs;
+        let next_dur = next.timeline_duration_secs();
         if t.duration_secs > next_dur / 2.0 + 1e-9 {
             return Err(CommandError::InvalidTransition(
                 "duration must be <= half the next clip duration".into(),
@@ -1318,6 +1364,93 @@ fn set_clip_transition(
 
     let clip = media_clip_mut(project, track_id, clip_id)?;
     clip.outgoing_transition = transition;
+    Ok(CommandOutcome::Applied)
+}
+
+fn set_clip_speed(
+    project: &mut Project,
+    track_id: Id,
+    clip_id: Id,
+    speed: f64,
+) -> Result<CommandOutcome, CommandError> {
+    if !speed.is_finite() || speed <= 0.0 {
+        return Err(CommandError::InvalidSpeed(
+            "speed must be a finite number > 0".into(),
+        ));
+    }
+    let speed = crate::project::clamp_clip_speed(speed);
+    let track = project
+        .find_track(track_id)
+        .ok_or(CommandError::TrackNotFound(track_id))?;
+    let clip = track
+        .clips
+        .iter()
+        .find(|c| c.id() == clip_id)
+        .ok_or(CommandError::ClipNotFound(clip_id, track_id))?
+        .as_media()
+        .ok_or(CommandError::NotMediaClip(clip_id))?;
+    let new_dur = (clip.source_out_secs - clip.source_in_secs).max(0.0) / speed;
+    check_no_overlap(track, clip.position_secs, new_dur, Some(clip_id))?;
+
+    let clip = media_clip_mut(project, track_id, clip_id)?;
+    clip.speed = speed;
+    Ok(CommandOutcome::Applied)
+}
+
+fn load_asset_pack(project: &mut Project, path: &str) -> Result<CommandOutcome, CommandError> {
+    let path_buf = std::path::PathBuf::from(path);
+    let pack = crate::packs::load_pack(&path_buf).map_err(CommandError::AssetPack)?;
+    if project.asset_pack_paths.iter().any(|p| {
+        p == &path_buf || crate::packs::pack_id_at(p).as_deref() == Some(pack.manifest.id.as_str())
+    }) {
+        // Replace path if same id already loaded from elsewhere.
+        project
+            .asset_pack_paths
+            .retain(|p| crate::packs::pack_id_at(p).as_deref() != Some(pack.manifest.id.as_str()));
+    }
+    project.asset_pack_paths.push(path_buf);
+    Ok(CommandOutcome::Applied)
+}
+
+fn unload_asset_pack(project: &mut Project, pack_id: &str) -> Result<CommandOutcome, CommandError> {
+    let before = project.asset_pack_paths.len();
+    project
+        .asset_pack_paths
+        .retain(|p| crate::packs::pack_id_at(p).as_deref() != Some(pack_id));
+    if project.asset_pack_paths.len() == before {
+        return Err(CommandError::AssetPack(format!(
+            "pack '{pack_id}' is not loaded"
+        )));
+    }
+    Ok(CommandOutcome::Applied)
+}
+
+fn load_wasm_plugin(project: &mut Project, path: &str) -> Result<CommandOutcome, CommandError> {
+    let path_buf = std::path::PathBuf::from(path);
+    let plugin =
+        crate::plugins::load_plugin_manifest(&path_buf).map_err(CommandError::WasmPlugin)?;
+    project
+        .wasm_plugin_paths
+        .retain(|p| crate::plugins::plugin_id_at(p).as_deref() != Some(plugin.id.as_str()));
+    // Validate the module loads once at install time.
+    crate::plugins::PluginHost::load_from_dir(&path_buf).map_err(CommandError::WasmPlugin)?;
+    project.wasm_plugin_paths.push(path_buf);
+    Ok(CommandOutcome::Applied)
+}
+
+fn unload_wasm_plugin(
+    project: &mut Project,
+    plugin_id: &str,
+) -> Result<CommandOutcome, CommandError> {
+    let before = project.wasm_plugin_paths.len();
+    project
+        .wasm_plugin_paths
+        .retain(|p| crate::plugins::plugin_id_at(p).as_deref() != Some(plugin_id));
+    if project.wasm_plugin_paths.len() == before {
+        return Err(CommandError::WasmPlugin(format!(
+            "plugin '{plugin_id}' is not loaded"
+        )));
+    }
     Ok(CommandOutcome::Applied)
 }
 

@@ -1,4 +1,4 @@
-// TS mirror of uppercut-core's project schema v3 (docs/project-schema.md). Keep in sync.
+// TS mirror of uppercut-core's project schema v4 (docs/project-schema.md). Keep in sync.
 
 export interface Project {
   schema_version: number;
@@ -7,6 +7,8 @@ export interface Project {
   settings: ProjectSettings;
   media: MediaItem[];
   tracks: Track[];
+  asset_pack_paths?: string[];
+  wasm_plugin_paths?: string[];
 }
 
 export interface ClipTransform {
@@ -16,13 +18,6 @@ export interface ClipTransform {
   scale_y: number;
   rotation_deg: number;
   opacity: number;
-}
-
-export type TransitionKind = "crossfade";
-
-export interface ClipTransition {
-  kind: TransitionKind;
-  duration_secs: number;
 }
 
 export type AnimProperty =
@@ -108,10 +103,42 @@ export interface MediaClip {
   enabled: boolean;
   fade_in_secs: number;
   fade_out_secs: number;
+  /** Timeline playback rate; duration = (source_out - source_in) / speed. Default 1. */
+  speed?: number;
   transform?: ClipTransform;
   keyframes?: KeyframeTrack[];
   effects?: EffectInstance[];
   outgoing_transition?: ClipTransition | null;
+}
+
+export type TransitionKind =
+  | "crossfade"
+  | "fade_black"
+  | "wipe_left"
+  | "wipe_right"
+  | "wipe_up"
+  | "wipe_down"
+  | "slide_left"
+  | "slide_right"
+  | "iris"
+  | "blur_dissolve";
+
+export const TRANSITION_KINDS: { id: TransitionKind; label: string }[] = [
+  { id: "crossfade", label: "Crossfade" },
+  { id: "fade_black", label: "Fade black" },
+  { id: "wipe_left", label: "Wipe left" },
+  { id: "wipe_right", label: "Wipe right" },
+  { id: "wipe_up", label: "Wipe up" },
+  { id: "wipe_down", label: "Wipe down" },
+  { id: "slide_left", label: "Slide left" },
+  { id: "slide_right", label: "Slide right" },
+  { id: "iris", label: "Iris" },
+  { id: "blur_dissolve", label: "Blur dissolve" },
+];
+
+export interface ClipTransition {
+  kind: TransitionKind;
+  duration_secs: number;
 }
 
 export interface CaptionClip {
@@ -134,7 +161,9 @@ export function clipPositionSecs(clip: Clip): number {
 }
 
 export function clipDurationSecs(clip: Clip): number {
-  return clip.type === "caption" ? clip.duration_secs : clip.source_out_secs - clip.source_in_secs;
+  if (clip.type === "caption") return clip.duration_secs;
+  const speed = clip.speed && clip.speed > 0 ? clip.speed : 1;
+  return (clip.source_out_secs - clip.source_in_secs) / speed;
 }
 
 export function clipEndSecs(clip: Clip): number {

@@ -16,12 +16,13 @@ Not affiliated with, endorsed by, or a clone of any existing commercial editor.
 
 ## Status
 
-**Early / pre-alpha — Phase 2 GUI rebuild (M0–M7) complete.** CLI and MCP drive the full
-command API end to end. Export renders video with burned-in captions, mixed audio (fades +
-music ducking), and supports Whisper auto-captions, Piper/OpenAI voiceover, and perception
-tools. The Tauri desktop app (Windows) provides the CapCut-class GUI: media bin with
-thumbnails, canvas timeline, native GPU preview, transport/inspectors, and export with
-progress + cancel. Manual QA: [docs/qa-checklist.md](docs/qa-checklist.md).
+**Early / pre-alpha — Phase 3 complete (effects, transitions, packs, WASM plugins v1).**
+CLI and MCP drive the full command API. Export renders video with burned-in captions,
+mixed audio, speed/atempo, transitions, and effects. The Tauri desktop app (Windows)
+provides the GUI; macOS/Linux CI builds the workspace (native preview still Windows-first).
+Examples: [`examples/packs/starter`](examples/packs/starter),
+[`examples/plugins/invert`](examples/plugins/invert),
+[`examples/registry`](examples/registry). Manual QA: [docs/qa-checklist.md](docs/qa-checklist.md).
 
 Read [PLAN.md](PLAN.md) for the full vision, tech stack rationale, and phased roadmap
 before contributing or building on this.

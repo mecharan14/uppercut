@@ -111,6 +111,39 @@ fn font_candidates() -> Vec<std::path::PathBuf> {
     paths
 }
 
+fn style_from_pack(style: &crate::packs::PackCaptionStyle) -> StyleSpec {
+    let anchor = match style.anchor.as_str() {
+        "top" => 0.18,
+        "center" | "middle" => 0.5,
+        _ => 0.82,
+    };
+    StyleSpec {
+        font_scale: (style.font_scale * 900.0).clamp(24.0, 96.0),
+        text_rgba: style.fill_rgba,
+        outline_rgba: style.stroke_rgba,
+        shadow_offset: style
+            .shadow_rgba
+            .map(|_| (style.shadow_offset[0] as i32, style.shadow_offset[1] as i32)),
+        box_rgba: style.box_rgba,
+        vertical_anchor: anchor,
+    }
+}
+
+/// Rasterize a caption, resolving `style_id` against builtins then loaded asset packs.
+pub fn render_caption_for_project(
+    project: &crate::project::Project,
+    text: &str,
+    style_id: &str,
+    width: u32,
+    height: u32,
+) -> Result<RgbaFrame, CaptionError> {
+    let packs = crate::packs::load_project_packs(project);
+    if let Some(pack_style) = crate::packs::find_caption_style(&packs, style_id) {
+        return render_caption_with_spec(text, &style_from_pack(pack_style), width, height);
+    }
+    render_caption(text, style_id, width, height)
+}
+
 /// Rasterize a single caption line into an RGBA frame sized to the output resolution.
 pub fn render_caption(
     text: &str,
@@ -118,8 +151,16 @@ pub fn render_caption(
     width: u32,
     height: u32,
 ) -> Result<RgbaFrame, CaptionError> {
+    render_caption_with_spec(text, &style_spec(style_id), width, height)
+}
+
+fn render_caption_with_spec(
+    text: &str,
+    spec: &StyleSpec,
+    width: u32,
+    height: u32,
+) -> Result<RgbaFrame, CaptionError> {
     let font = load_font()?;
-    let spec = style_spec(style_id);
     let scale = PxScale::from(spec.font_scale);
     let font_scaled = font.as_scaled(scale);
 

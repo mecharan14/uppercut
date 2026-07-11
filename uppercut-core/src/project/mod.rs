@@ -1,4 +1,4 @@
-//! Project schema v3 — matches docs/project-schema.md exactly.
+//! Project schema v4 — matches docs/project-schema.md exactly.
 //! If you change a type here, update that doc in the same change.
 
 use serde::{Deserialize, Serialize};
@@ -11,10 +11,19 @@ pub use anim::{evaluate_transform, evaluate_volume_db};
 
 pub type Id = uuid::Uuid;
 
-/// Current on-disk schema. Loaders accept `1`..=`3` (older files get serde defaults for
-/// new fields); new projects and saves write `3`.
-pub const SCHEMA_VERSION: u32 = 3;
+/// Current on-disk schema. Loaders accept `1`..=`4` (older files get serde defaults for
+/// new fields); new projects and saves write `4`.
+pub const SCHEMA_VERSION: u32 = 4;
 pub const MIN_LOADABLE_SCHEMA_VERSION: u32 = 1;
+
+/// Clamp / sanitize clip playback speed (Phase 3).
+pub fn clamp_clip_speed(speed: f64) -> f64 {
+    if !speed.is_finite() || speed <= 0.0 {
+        1.0
+    } else {
+        speed.clamp(0.25, 4.0)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
@@ -24,6 +33,12 @@ pub struct Project {
     pub settings: Settings,
     pub media: Vec<MediaItem>,
     pub tracks: Vec<Track>,
+    /// Absolute or project-relative paths to loaded asset-pack roots (Phase 3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asset_pack_paths: Vec<PathBuf>,
+    /// Absolute or project-relative paths to loaded WASM plugin roots (Phase 3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wasm_plugin_paths: Vec<PathBuf>,
 }
 
 impl Project {
@@ -35,6 +50,8 @@ impl Project {
             settings,
             media: Vec::new(),
             tracks: Vec::new(),
+            asset_pack_paths: Vec::new(),
+            wasm_plugin_paths: Vec::new(),
         }
     }
 
@@ -184,7 +201,7 @@ impl Clip {
 
     pub fn duration_secs(&self) -> f64 {
         match self {
-            Clip::Video(c) | Clip::Audio(c) => c.source_out_secs - c.source_in_secs,
+            Clip::Video(c) | Clip::Audio(c) => c.timeline_duration_secs(),
             Clip::Caption(c) => c.duration_secs,
         }
     }
@@ -323,10 +340,65 @@ pub struct ClipTransition {
     pub duration_secs: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransitionKind {
     Crossfade,
+    FadeBlack,
+    WipeLeft,
+    WipeRight,
+    WipeUp,
+    WipeDown,
+    SlideLeft,
+    SlideRight,
+    Iris,
+    BlurDissolve,
+}
+
+impl TransitionKind {
+    pub const ALL: &[TransitionKind] = &[
+        Self::Crossfade,
+        Self::FadeBlack,
+        Self::WipeLeft,
+        Self::WipeRight,
+        Self::WipeUp,
+        Self::WipeDown,
+        Self::SlideLeft,
+        Self::SlideRight,
+        Self::Iris,
+        Self::BlurDissolve,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Crossfade => "crossfade",
+            Self::FadeBlack => "fade_black",
+            Self::WipeLeft => "wipe_left",
+            Self::WipeRight => "wipe_right",
+            Self::WipeUp => "wipe_up",
+            Self::WipeDown => "wipe_down",
+            Self::SlideLeft => "slide_left",
+            Self::SlideRight => "slide_right",
+            Self::Iris => "iris",
+            Self::BlurDissolve => "blur_dissolve",
+        }
+    }
+
+    /// Uniform `kind` id for `transition.wgsl`.
+    pub fn shader_id(self) -> u32 {
+        match self {
+            Self::Crossfade => 0,
+            Self::FadeBlack => 1,
+            Self::WipeLeft => 2,
+            Self::WipeRight => 3,
+            Self::WipeUp => 4,
+            Self::WipeDown => 5,
+            Self::SlideLeft => 6,
+            Self::SlideRight => 7,
+            Self::Iris => 8,
+            Self::BlurDissolve => 9,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -344,6 +416,10 @@ pub struct MediaClip {
     /// Fade-out duration at the clip end (audio export, Phase 1).
     #[serde(default)]
     pub fade_out_secs: f64,
+    /// Timeline playback rate (Phase 3). `1.0` = realtime; timeline length =
+    /// `(source_out - source_in) / speed`.
+    #[serde(default = "default_speed")]
+    pub speed: f64,
     /// Static transform (Phase 3.1). Overridden per-property by `keyframes` when present.
     #[serde(default)]
     pub transform: ClipTransform,
@@ -355,6 +431,10 @@ pub struct MediaClip {
     /// Transition into the next clip on the same track (Phase 3.5). Renderer-only overlap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outgoing_transition: Option<ClipTransition>,
+}
+
+fn default_speed() -> f64 {
+    1.0
 }
 
 impl Default for MediaClip {
@@ -369,11 +449,29 @@ impl Default for MediaClip {
             enabled: true,
             fade_in_secs: 0.0,
             fade_out_secs: 0.0,
+            speed: 1.0,
             transform: ClipTransform::default(),
             keyframes: Vec::new(),
             effects: Vec::new(),
             outgoing_transition: None,
         }
+    }
+}
+
+impl MediaClip {
+    pub fn speed_factor(&self) -> f64 {
+        clamp_clip_speed(self.speed)
+    }
+
+    /// Timeline span occupied by this clip.
+    pub fn timeline_duration_secs(&self) -> f64 {
+        let src = (self.source_out_secs - self.source_in_secs).max(0.0);
+        src / self.speed_factor()
+    }
+
+    /// Media source time corresponding to absolute timeline time `t`.
+    pub fn source_time_at(&self, t: f64) -> f64 {
+        self.source_in_secs + (t - self.position_secs) * self.speed_factor()
     }
 }
 

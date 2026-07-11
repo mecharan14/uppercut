@@ -86,10 +86,10 @@ Before considering a change complete:
 
 ## 4. Current phase
 
-Check PLAN.md §4 for the phase roadmap. **Phase 2 GUI rebuild (M0–M7) is complete.**
-**Phase 3 is in progress:** **3.1–3.5 landed** — schema v3 (`ClipTransform`, keyframes,
-builtin effects, `outgoing_transition` crossfade), preview transform handles, keyframe
-editor, Effects/Transitions panels. Later: WASM plugins, asset packs, macOS/Linux preview.
+Check PLAN.md §4 for the phase roadmap. **Phase 3 is complete** (1A/2A scope): schema v4
+(`speed`, ten WGSL transitions, glitch), asset packs, WASM frame-effect host v1, example
+pack/plugin + registry seed, macOS/Linux CI. Native preview remains Windows-first.
+**Phase 4** (parity march: masks, chroma, tracking, etc.) is next.
 
 ## 5. When in doubt
 

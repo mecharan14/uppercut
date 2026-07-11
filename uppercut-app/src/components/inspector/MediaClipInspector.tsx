@@ -7,6 +7,7 @@ import {
   setAudioGain,
   setClipEffects,
   setClipEnabled,
+  setClipSpeed,
   setClipTransform,
   setTrackAudioRole,
   trimClip,
@@ -74,6 +75,7 @@ export function MediaClipInspector({ track, clip }: { track: Track; clip: MediaC
   const [fadeIn, setFadeIn] = useState(clip.fade_in_secs);
   const [fadeOut, setFadeOut] = useState(clip.fade_out_secs);
   const [transform, setTransform] = useState<ClipTransform>(() => clipTransform(clip));
+  const [speed, setSpeed] = useState(clip.speed ?? 1);
   const [linkScale, setLinkScale] = useState(true);
 
   useEffect(() => {
@@ -83,6 +85,7 @@ export function MediaClipInspector({ track, clip }: { track: Track; clip: MediaC
     setFadeIn(clip.fade_in_secs);
     setFadeOut(clip.fade_out_secs);
     setTransform(clipTransform(clip));
+    setSpeed(clip.speed ?? 1);
   }, [
     clip.id,
     clip.gain_db,
@@ -91,6 +94,7 @@ export function MediaClipInspector({ track, clip }: { track: Track; clip: MediaC
     clip.fade_in_secs,
     clip.fade_out_secs,
     clip.transform,
+    clip.speed,
   ]);
 
   async function commitTransform(next: ClipTransform) {
@@ -165,6 +169,20 @@ export function MediaClipInspector({ track, clip }: { track: Track; clip: MediaC
       {showTransform && (
         <div className="inspector-section">
           <h3>Transform</h3>
+          <label className="insp-cell">
+            <span>Speed · {speed.toFixed(2)}×</span>
+            <input
+              type="range"
+              min={0.25}
+              max={4}
+              step={0.05}
+              value={speed}
+              disabled={track.locked}
+              onChange={(e) => setSpeed(parseFloat(e.target.value))}
+              onMouseUp={() => void dispatch(setClipSpeed(track.id, clip.id, speed))}
+              onTouchEnd={() => void dispatch(setClipSpeed(track.id, clip.id, speed))}
+            />
+          </label>
           <div className="insp-grid-2">
             <NumCell
               label="X"
@@ -291,6 +309,22 @@ export function MediaClipInspector({ track, clip }: { track: Track; clip: MediaC
       {showAudio && (
         <div className="inspector-section">
           <h3>Audio</h3>
+          {!showTransform && (
+            <label className="insp-cell">
+              <span>Speed · {speed.toFixed(2)}×</span>
+              <input
+                type="range"
+                min={0.25}
+                max={4}
+                step={0.05}
+                value={speed}
+                disabled={track.locked}
+                onChange={(e) => setSpeed(parseFloat(e.target.value))}
+                onMouseUp={() => void dispatch(setClipSpeed(track.id, clip.id, speed))}
+                onTouchEnd={() => void dispatch(setClipSpeed(track.id, clip.id, speed))}
+              />
+            </label>
+          )}
           <label className="insp-cell">
             <span>Volume · {gain} dB</span>
             <input

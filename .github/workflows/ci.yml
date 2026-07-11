@@ -6,12 +6,13 @@ on:
   pull_request:
     branches: [main]
 
-# PLAN.md Phase 0: Windows-first CI. macOS/Linux runners are added in Phase 3
-# (docs/architecture.md, PLAN.md §4) once uppercut-app and native media deps are wired up
-# cross-platform — don't add them ahead of that without a reason.
 jobs:
   build-and-test:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -24,6 +25,8 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -47,3 +50,6 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --verbose
+        env:
+          # Prefer Vulkan/GL/DX12; soft adapters help headless Linux runners.
+          WGPU_BACKEND: vulkan,dx12,metal,gl

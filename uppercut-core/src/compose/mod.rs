@@ -2,15 +2,18 @@
 //! scaled to the output resolution, and read back as RGBA for the FFmpeg encoder.
 //! Phase 3.1 adds per-layer user transform (translate / scale / rotate) and opacity.
 //! Phase 3.4 runs builtin effect chains on each layer before the cover+transform draw.
+//! Phase 3 adds dual-texture WGSL transitions.
 
 pub mod effects;
+mod transition;
 
 pub use effects::{builtin_effect_ids, default_params, BUILTIN_EFFECT_IDS};
 
 use crate::media::RgbaFrame;
-use crate::project::{ClipTransform, EffectInstance};
+use crate::project::{ClipTransform, EffectInstance, TransitionKind};
 use effects::EffectProcessor;
 use thiserror::Error;
+use transition::TransitionPass;
 use wgpu::util::DeviceExt;
 
 #[derive(Debug, Error)]
@@ -21,12 +24,22 @@ pub enum ComposeError {
     Wgpu(String),
 }
 
+/// Marks a layer as one side of an outgoing→incoming transition pair.
+#[derive(Debug, Clone, Copy)]
+pub struct LayerTransition {
+    pub kind: TransitionKind,
+    pub progress: f32,
+    pub is_incoming: bool,
+}
+
 /// One composited layer: decoded (or caption) RGBA plus evaluated transform at frame time.
 pub struct ComposeLayer {
     pub frame: RgbaFrame,
     pub transform: ClipTransform,
     /// Builtin effect instances (Phase 3.4). Empty / all-disabled → identity path.
     pub effects: Vec<EffectInstance>,
+    /// When set on two consecutive layers (outgoing then incoming), uses the transition pass.
+    pub transition: Option<LayerTransition>,
 }
 
 impl From<RgbaFrame> for ComposeLayer {
@@ -35,6 +48,7 @@ impl From<RgbaFrame> for ComposeLayer {
             frame,
             transform: ClipTransform::default(),
             effects: Vec::new(),
+            transition: None,
         }
     }
 }
@@ -104,6 +118,7 @@ pub struct Compositor {
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     effects: EffectProcessor,
+    transitions: TransitionPass,
 }
 
 impl Compositor {
@@ -244,6 +259,7 @@ impl Compositor {
         });
 
         let effects = EffectProcessor::new(&device);
+        let transitions = TransitionPass::new(&device);
 
         Ok(Self {
             device,
@@ -257,6 +273,7 @@ impl Compositor {
             pipeline,
             sampler,
             effects,
+            transitions,
         })
     }
 
@@ -299,102 +316,44 @@ impl Compositor {
         // Hold textures until submit.
         let mut keep_alive: Vec<wgpu::Texture> = Vec::with_capacity(layers.len());
 
-        for layer in layers {
-            let frame = &layer.frame;
-            let texture = self.device.create_texture_with_data(
-                &self.queue,
-                &wgpu::TextureDescriptor {
-                    label: Some("layer"),
-                    size: wgpu::Extent3d {
-                        width: frame.width,
-                        height: frame.height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                },
-                wgpu::util::TextureDataOrder::LayerMajor,
-                &frame.pixels,
-            );
-            let uploaded_view = texture.create_view(&Default::default());
-
-            let use_effects = self.effects.apply(
-                &self.device,
-                &mut encoder,
-                &uploaded_view,
-                frame.width,
-                frame.height,
-                &layer.effects,
-            )?;
-
-            let params = layer_params(
-                frame.width,
-                frame.height,
-                self.width,
-                self.height,
-                &layer.transform,
-            );
-            let params_buffer = self
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("layer-params"),
-                    contents: bytemuck::bytes_of(&params),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-
-            // Sample either the effect result or the original upload.
-            let sample_view = if use_effects {
-                self.effects.result_view()
-            } else {
-                &uploaded_view
-            };
-
-            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("layer-bind"),
-                layout: &self.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(sample_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: params_buffer.as_entire_binding(),
-                    },
-                ],
+        let mut i = 0;
+        while i < layers.len() {
+            let pair = layers.get(i).and_then(|a| {
+                let ta = a.transition?;
+                if ta.is_incoming {
+                    return None;
+                }
+                let b = layers.get(i + 1)?;
+                let tb = b.transition?;
+                if !tb.is_incoming || ta.kind != tb.kind {
+                    return None;
+                }
+                Some((ta.kind, ta.progress))
             });
 
-            {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("composite-layer"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &self.output_view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &bind_group, &[]);
-                pass.draw(0..6, 0..1);
+            if let Some((kind, progress)) = pair {
+                self.transitions
+                    .ensure_rts(&self.device, self.width, self.height);
+                self.draw_layer_to_transition_rt(&layers[i], true, &mut encoder, &mut keep_alive)?;
+                self.draw_layer_to_transition_rt(
+                    &layers[i + 1],
+                    false,
+                    &mut encoder,
+                    &mut keep_alive,
+                )?;
+                self.transitions.blend(
+                    &self.device,
+                    &mut encoder,
+                    &self.output_view,
+                    kind,
+                    progress,
+                )?;
+                i += 2;
+                continue;
             }
 
-            keep_alive.push(texture);
+            self.draw_layer_to_output(&layers[i], &mut encoder, &mut keep_alive)?;
+            i += 1;
         }
 
         let bytes_per_row = self.width * 4;
@@ -457,6 +416,160 @@ impl Compositor {
 
         Ok(out)
     }
+
+    fn draw_layer_to_output(
+        &mut self,
+        layer: &ComposeLayer,
+        encoder: &mut wgpu::CommandEncoder,
+        keep_alive: &mut Vec<wgpu::Texture>,
+    ) -> Result<(), ComposeError> {
+        self.draw_layer(layer, DrawTarget::Output, encoder, keep_alive)
+    }
+
+    fn draw_layer_to_transition_rt(
+        &mut self,
+        layer: &ComposeLayer,
+        to_a: bool,
+        encoder: &mut wgpu::CommandEncoder,
+        keep_alive: &mut Vec<wgpu::Texture>,
+    ) -> Result<(), ComposeError> {
+        self.draw_layer(
+            layer,
+            if to_a {
+                DrawTarget::TransitionA
+            } else {
+                DrawTarget::TransitionB
+            },
+            encoder,
+            keep_alive,
+        )
+    }
+
+    fn draw_layer(
+        &mut self,
+        layer: &ComposeLayer,
+        target: DrawTarget,
+        encoder: &mut wgpu::CommandEncoder,
+        keep_alive: &mut Vec<wgpu::Texture>,
+    ) -> Result<(), ComposeError> {
+        let frame = &layer.frame;
+        let texture = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("layer"),
+                size: wgpu::Extent3d {
+                    width: frame.width,
+                    height: frame.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &frame.pixels,
+        );
+        let uploaded_view = texture.create_view(&Default::default());
+
+        let use_effects = self.effects.apply(
+            &self.device,
+            encoder,
+            &uploaded_view,
+            frame.width,
+            frame.height,
+            &layer.effects,
+        )?;
+
+        let params = layer_params(
+            frame.width,
+            frame.height,
+            self.width,
+            self.height,
+            &layer.transform,
+        );
+        let params_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("layer-params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+
+        let sample_view = if use_effects {
+            self.effects.result_view()
+        } else {
+            &uploaded_view
+        };
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("layer-bind"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(sample_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let clear = matches!(target, DrawTarget::TransitionA | DrawTarget::TransitionB);
+        let dest_view = match target {
+            DrawTarget::Output => &self.output_view,
+            DrawTarget::TransitionA => self.transitions.view_a(),
+            DrawTarget::TransitionB => self.transitions.view_b(),
+        };
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("composite-layer"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: dest_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: if clear {
+                            wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.0,
+                                g: 0.0,
+                                b: 0.0,
+                                a: 1.0,
+                            })
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..6, 0..1);
+        }
+
+        keep_alive.push(texture);
+        Ok(())
+    }
+}
+
+enum DrawTarget {
+    Output,
+    TransitionA,
+    TransitionB,
 }
 
 #[cfg(test)]
@@ -572,6 +685,7 @@ mod tests {
                 frame: frame.clone(),
                 transform: ClipTransform::default(),
                 effects: vec![],
+                transition: None,
             }])
             .unwrap();
         let bright = c
@@ -582,6 +696,7 @@ mod tests {
                     "builtin:color_adjust",
                     [("exposure".into(), 1.0)].into_iter().collect(),
                 )],
+                transition: None,
             }])
             .unwrap();
         assert!(
@@ -605,6 +720,7 @@ mod tests {
                 frame: frame.clone(),
                 transform: ClipTransform::default(),
                 effects: vec![],
+                transition: None,
             }])
             .unwrap();
         let empty_chain = c
@@ -612,6 +728,7 @@ mod tests {
                 frame: frame.clone(),
                 transform: ClipTransform::default(),
                 effects: vec![],
+                transition: None,
             }])
             .unwrap();
         assert_eq!(identity, empty_chain);
@@ -626,6 +743,7 @@ mod tests {
                 frame,
                 transform: ClipTransform::default(),
                 effects: vec![disabled],
+                transition: None,
             }])
             .unwrap();
         assert_eq!(identity, disabled_out);
@@ -644,6 +762,7 @@ mod tests {
                 frame: frame.clone(),
                 transform: ClipTransform::default(),
                 effects: vec![],
+                transition: None,
             }])
             .unwrap();
         let blurred = c
@@ -654,6 +773,7 @@ mod tests {
                     "builtin:blur",
                     [("radius".into(), 0.0)].into_iter().collect(),
                 )],
+                transition: None,
             }])
             .unwrap();
         // radius 0 skips the blur passes entirely → bit-exact identity.
@@ -663,10 +783,11 @@ mod tests {
     #[test]
     fn builtin_effect_ids_lists_locked_set() {
         let ids = builtin_effect_ids();
+        assert_eq!(ids.len(), 5);
         assert!(ids.contains(&"builtin:color_adjust"));
         assert!(ids.contains(&"builtin:blur"));
         assert!(ids.contains(&"builtin:lut_contrast"));
         assert!(ids.contains(&"builtin:lut_warm"));
-        assert_eq!(ids.len(), 4);
+        assert!(ids.contains(&"builtin:glitch"));
     }
 }

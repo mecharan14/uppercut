@@ -1,0 +1,6 @@
+{
+  "id": "invert",
+  "name": "Invert Colors",
+  "version": "1",
+  "wasm": "invert.wasm"
+}

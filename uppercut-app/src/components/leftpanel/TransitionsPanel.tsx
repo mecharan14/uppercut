@@ -1,7 +1,7 @@
 import { Blend } from "lucide-react";
 import { setClipTransition } from "../../lib/commands";
-import type { ClipTransition, MediaClip } from "../../lib/types";
-import { clipDurationSecs } from "../../lib/types";
+import type { ClipTransition, MediaClip, TransitionKind } from "../../lib/types";
+import { clipDurationSecs, TRANSITION_KINDS } from "../../lib/types";
 import { useEditorStore } from "../../store/editorStore";
 
 export function TransitionsPanel() {
@@ -11,15 +11,14 @@ export function TransitionsPanel() {
 
   const track = project?.tracks.find((t) => t.id === selection?.trackId);
   const clip = track?.clips.find((c) => c.id === selection?.clipId);
-  const mediaClip =
-    clip && clip.type === "video" ? (clip as MediaClip) : null;
+  const mediaClip = clip && clip.type === "video" ? (clip as MediaClip) : null;
   const locked = track?.locked ?? true;
 
   if (!track || track.kind !== "video" || !mediaClip) {
     return (
       <div className="panel-body">
         <h3>Transitions</h3>
-        <p className="empty-hint">Select a video clip to set its outgoing crossfade.</p>
+        <p className="empty-hint">Select a video clip to set its outgoing transition.</p>
       </div>
     );
   }
@@ -38,29 +37,35 @@ export function TransitionsPanel() {
     await dispatch(setClipTransition(track!.id, mediaClip!.id, transition));
   }
 
+  function pick(kind: TransitionKind) {
+    void apply({
+      kind,
+      duration_secs: current?.duration_secs ?? Math.min(0.5, Math.max(0.05, maxDur)),
+    });
+  }
+
   return (
     <div className="panel-body transitions-panel">
       <h3>Transitions</h3>
-      <p className="empty-hint">
-        Outgoing crossfade on the selected clip (renderer blends into the next clip).
-      </p>
+      <p className="empty-hint">Outgoing blend into the next clip on this track.</p>
       {!next ? (
-        <p className="empty-hint">No following clip on this track — add one after this clip.</p>
+        <p className="empty-hint">No following clip — add one after this clip.</p>
       ) : (
         <>
-          <button
-            type="button"
-            disabled={locked}
-            onClick={() =>
-              void apply({
-                kind: "crossfade",
-                duration_secs: Math.min(0.5, Math.max(0.05, maxDur)),
-              })
-            }
-          >
-            <Blend size={14} strokeWidth={1.75} className="btn-lucide" />
-            Add crossfade
-          </button>
+          <div className="effects-catalog">
+            {TRANSITION_KINDS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={current?.kind === t.id ? "active" : undefined}
+                disabled={locked}
+                onClick={() => pick(t.id)}
+              >
+                <Blend size={14} strokeWidth={1.75} />
+                {t.label}
+              </button>
+            ))}
+          </div>
           {current && (
             <div className="field" style={{ marginTop: "0.75rem" }}>
               <label>Duration (seconds)</label>
@@ -76,7 +81,7 @@ export function TransitionsPanel() {
                     maxDur,
                     Math.max(0.05, parseFloat(e.target.value) || 0.05),
                   );
-                  void apply({ kind: "crossfade", duration_secs });
+                  void apply({ kind: current.kind, duration_secs });
                 }}
               />
               <button

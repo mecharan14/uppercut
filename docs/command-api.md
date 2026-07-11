@@ -1,6 +1,6 @@
 # Command API
 
-Status: **current** (matches project schema v3). This is the source of truth for the `Command` enum and
+Status: **current** (matches project schema v4). This is the source of truth for the `Command` enum and
 `apply_command` in `uppercut-core`. GUI, CLI, and MCP must all dispatch through this exact
 set (see AGENTS.md §0.1) — none of them may mutate `Project` state any other way.
 
@@ -31,6 +31,11 @@ pub enum Command {
     SetClipKeyframes { track_id: Id, clip_id: Id, keyframes: Vec<KeyframeTrack> },
     SetClipEffects { track_id: Id, clip_id: Id, effects: Vec<EffectInstance> },
     SetClipTransition { track_id: Id, clip_id: Id, transition: Option<ClipTransition> },
+    SetClipSpeed { track_id: Id, clip_id: Id, speed: f64 },
+    LoadAssetPack { path: String },
+    UnloadAssetPack { pack_id: String },
+    LoadWasmPlugin { path: String },
+    UnloadWasmPlugin { plugin_id: String },
     Export { output_path: String, preset: ExportPreset },
 }
 
@@ -213,27 +218,38 @@ finite times, finite values, opacity keys in `0..=1`; sorts keys by time on writ
 
 - Errors: track/clip not found, not a media clip, or invalid keyframe data.
 
-### `SetClipEffects` (Phase 3.1 / 3.4)
+### `SetClipEffects` (Phase 3.1 / 3.4 / 3)
 Replaces the effect-instance list on a media clip. Validates unique instance ids, known
-builtin `effect_id`s (`builtin:color_adjust`, `builtin:blur`, `builtin:lut_contrast`,
-`builtin:lut_warm`), finite params, and clamps known params to reasonable ranges.
-Enabled instances are executed by the compositor (Phase 3.4).
+`effect_id`s (builtins, loaded `pack:…:lut:…`, loaded `wasm:…`), finite params, and clamps
+known params. GPU builtins run in the compositor; pack LUTs and WASM effects run on the CPU
+frame before upload.
 
 - Errors: track/clip not found, not a media clip, or invalid effect list.
 
-### `SetClipTransition` (Phase 3.5)
-Sets or clears (`None`) the outgoing `ClipTransition` on a video media clip. Only
-`crossfade` is supported. Requires a following clip on the same track; duration must be
-`> 0` and ≤ half of each adjacent clip.
+### `SetClipTransition` (Phase 3.5 / 3)
+Sets or clears (`None`) the outgoing `ClipTransition` on a video media clip. Supports all
+ten builtin kinds (`crossfade`, `fade_black`, `wipe_*`, `slide_*`, `iris`, `blur_dissolve`).
+Requires a following clip; duration must be `> 0` and ≤ half of each adjacent clip's
+*timeline* duration (honors `speed`).
 
 - Errors: not a video track, no following clip, invalid duration.
+
+### `SetClipSpeed` (Phase 3)
+Sets constant playback `speed` on a media clip (`0.25`..`4.0`). Timeline duration and
+source-time mapping update; audio uses pitch-preserving `atempo`. Rejects overlaps caused
+by a longer timeline span when slowing down.
+
+### `LoadAssetPack` / `UnloadAssetPack` (Phase 3)
+Load or unload a declarative pack directory (`pack.json`). Paths are stored on the project.
+
+### `LoadWasmPlugin` / `UnloadWasmPlugin` (Phase 3)
+Load or unload a WASM frame-effect plugin directory (`plugin.json` + `.wasm`).
 
 ### `Export`
 Renders the current `Project` timeline to `output_path` using `preset` (e.g.
 `TikTok9x16`, `Youtube16x9`, or a `Custom { width, height, fps }` variant). Muxes mixed
 audio (with fades and optional music ducking) and burns caption clips. Video layers honor
-evaluated transform+opacity and enabled builtin effects; audio mix uses evaluated volume
-(including Volume keyframes).
+evaluated transform+opacity, speed, transitions, and effects (builtin / pack / wasm).
 
 `Export` does not mutate `Project`. Progress / cancel for interactive clients go through
 `uppercut_core::export::export_project_with_progress` (GUI Tauri command + CLI status
@@ -255,11 +271,10 @@ removes both the track and the clip together instead of leaving an empty track b
 of `uppercut-core`'s public API — CLI and MCP keep calling `apply_command` once per
 command, which is sufficient for scripted/agent use.
 
-## Non-goals for later Phase 3
+## Non-goals (Phase 4+)
 
-WASM plugin invocation, asset-pack commands, and additional transition kinds are later
-milestones — see [project-schema.md](project-schema.md) "What's intentionally not in v3 yet".
-Do not add a command for a feature that has no schema representation yet.
+Keyframed speed ramps, in-app pack/plugin browser, stickers/SFX packs, audio-only WASM
+effects, macOS/Linux native preview — see [project-schema.md](project-schema.md).
 
 ## Version history
 
@@ -276,6 +291,8 @@ Do not add a command for a feature that has no schema representation yet.
   `SetClipEffects`; `SplitClip` inherits transform / splits keyframes / remints effect ids.
 - **Phase 3.4**: `SetClipEffects` executes builtin WGSL effects.
 - **Phase 3.5** (project schema v3): added `SetClipTransition` (crossfade).
+- **Phase 3 close-out** (project schema v4): `SetClipSpeed`; ten transition kinds; glitch;
+  `LoadAssetPack` / `UnloadAssetPack`; `LoadWasmPlugin` / `UnloadWasmPlugin`.
 
 - **Phase 3.4** (non-breaking): `SetClipEffects` validates known builtin ids + param
   clamps; compositor executes `builtin:color_adjust` / `blur` / `lut_contrast` / `lut_warm`.

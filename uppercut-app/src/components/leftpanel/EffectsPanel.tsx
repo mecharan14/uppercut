@@ -16,6 +16,11 @@ export const BUILTIN_EFFECTS: {
   { id: "builtin:blur", label: "Blur", defaults: { radius: 4 } },
   { id: "builtin:lut_contrast", label: "LUT Contrast", defaults: { intensity: 1 } },
   { id: "builtin:lut_warm", label: "LUT Warm", defaults: { intensity: 1 } },
+  {
+    id: "builtin:glitch",
+    label: "Glitch",
+    defaults: { intensity: 0.5, slice: 0.5 },
+  },
 ];
 
 function newId(): string {

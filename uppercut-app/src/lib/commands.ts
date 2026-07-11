@@ -198,6 +198,26 @@ export function setClipTransition(
   };
 }
 
+export function setClipSpeed(trackId: string, clipId: string, speed: number) {
+  return { command: "SetClipSpeed", track_id: trackId, clip_id: clipId, speed };
+}
+
+export function loadAssetPack(path: string) {
+  return { command: "LoadAssetPack", path };
+}
+
+export function unloadAssetPack(packId: string) {
+  return { command: "UnloadAssetPack", pack_id: packId };
+}
+
+export function loadWasmPlugin(path: string) {
+  return { command: "LoadWasmPlugin", path };
+}
+
+export function unloadWasmPlugin(pluginId: string) {
+  return { command: "UnloadWasmPlugin", plugin_id: pluginId };
+}
+
 export function generateCaptions(
   mediaId: string,
   trackId: string,

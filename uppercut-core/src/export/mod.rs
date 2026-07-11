@@ -1,8 +1,8 @@
 //! Timeline → decode → wgpu composite → encode export pipeline.
 
-use crate::captions::{render_caption, CaptionError};
+use crate::captions::CaptionError;
 use crate::commands::ExportPreset;
-use crate::compose::{ComposeError, ComposeLayer, Compositor};
+use crate::compose::{ComposeError, ComposeLayer, Compositor, LayerTransition};
 use crate::media::{
     mix_timeline_audio, mux_video_audio, AudioMixClip, DuckSettings, FfmpegCliError, ReaderOptions,
     RgbaFrame, VideoEncoder, VideoReader,
@@ -90,6 +90,7 @@ struct ActiveLayer {
     source_time: f64,
     transform: ClipTransform,
     effects: Vec<crate::project::EffectInstance>,
+    transition: Option<crate::compose::LayerTransition>,
 }
 
 struct ActiveCaption {
@@ -170,39 +171,38 @@ impl FrameRenderer {
     pub fn render(&mut self, project: &Project, time_secs: f64) -> Result<Vec<u8>, ExportError> {
         let layers = active_layers(project, time_secs)?;
         let mut compose_layers = Vec::with_capacity(layers.len() + 2);
+        let plugin_host = crate::plugins::PluginHost::for_project(project).ok();
 
         let reader_opts = ReaderOptions {
             target_height: self.decode_opts.target_height,
             output_fps: self.decode_opts.output_fps,
         };
         for layer in &layers {
-            // Keyed by `track_id`, not `media_id`: two tracks can legitimately show the
-            // same underlying media at once (a minimal picture-in-picture setup), and each
-            // needs its own decoder/ffmpeg process at its own source position — sharing one
-            // decoder keyed by media_id made the two layers fight over a single ffmpeg
-            // process's playback position instead of decoding independently.
             let decoder = self
                 .decoders
                 .entry(layer.decoder_key)
                 .or_insert_with(|| DecoderState::new(layer.path.clone(), reader_opts));
-            // An active layer can reference a different media item than the decoder
-            // currently open for this key (e.g. a cut to a different source clip) —
-            // force a fresh decoder rather than reading the wrong file.
             if decoder.path != layer.path {
                 *decoder = DecoderState::new(layer.path.clone(), reader_opts);
             }
-            if let Some(frame) = decoder.frame_at(layer.source_time)? {
+            if let Some(mut frame) = decoder.frame_at(layer.source_time)? {
+                crate::packs::apply_pack_effects(project, &mut frame, &layer.effects);
+                if let Some(host) = plugin_host.as_ref() {
+                    let _ = host.apply_effects(&mut frame, &layer.effects);
+                }
                 compose_layers.push(ComposeLayer {
                     frame,
                     transform: layer.transform,
                     effects: layer.effects.clone(),
+                    transition: layer.transition,
                 });
             }
         }
 
         for cap in active_captions(project, time_secs) {
             compose_layers.push(ComposeLayer {
-                frame: render_caption(
+                frame: crate::captions::render_caption_for_project(
+                    project,
                     &cap.text,
                     &cap.style_id,
                     self.settings.width,
@@ -210,6 +210,7 @@ impl FrameRenderer {
                 )?,
                 transform: ClipTransform::default(),
                 effects: Vec::new(),
+                transition: None,
             });
         }
 
@@ -395,6 +396,7 @@ fn collect_audio_clips(project: &Project) -> Vec<AudioMixClip> {
                     fade_in_secs: a.fade_in_secs,
                     fade_out_secs: a.fade_out_secs,
                     role: track.audio_role,
+                    speed: a.speed_factor(),
                 });
             }
         }
@@ -483,23 +485,25 @@ pub fn mix_timeline_audio_range_to_file(
             let Some(media) = project.find_media(a.media_id) else {
                 continue;
             };
-            let clip_len = a.source_out_secs - a.source_in_secs;
+            let clip_len = a.timeline_duration_secs();
             let clip_end = a.position_secs + clip_len;
             let overlap_start = start_secs.max(a.position_secs);
             let overlap_end = end_secs.min(clip_end);
             if overlap_end <= overlap_start {
                 continue;
             }
-            let offset = overlap_start - a.position_secs;
+            let offset = (overlap_start - a.position_secs) * a.speed_factor();
+            let overlap_src = (overlap_end - overlap_start) * a.speed_factor();
             shifted.push(AudioMixClip {
                 path: media.path.clone(),
                 position_secs: overlap_start - start_secs,
                 source_in_secs: a.source_in_secs + offset,
-                source_out_secs: a.source_in_secs + offset + (overlap_end - overlap_start),
+                source_out_secs: a.source_in_secs + offset + overlap_src,
                 gain_db: evaluate_volume_db(a, overlap_start),
                 fade_in_secs: a.fade_in_secs,
                 fade_out_secs: a.fade_out_secs,
                 role: track.audio_role,
+                speed: a.speed_factor(),
             });
         }
     }
@@ -560,11 +564,11 @@ fn active_layers(project: &Project, t: f64) -> Result<Vec<ActiveLayer>, ExportEr
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Crossfade: during [cut-d, cut) emit outgoing + incoming with complementary opacity.
+        // Transition window: during [cut-d, cut) emit outgoing + incoming for WGSL blend.
         let mut handled = false;
         for (i, v) in video_clips.iter().enumerate() {
             let start = v.position_secs;
-            let end = start + (v.source_out_secs - v.source_in_secs);
+            let end = start + v.timeline_duration_secs();
             let Some(tr) = v.outgoing_transition.as_ref() else {
                 continue;
             };
@@ -584,7 +588,7 @@ fn active_layers(project: &Project, t: f64) -> Result<Vec<ActiveLayer>, ExportEr
                 continue;
             }
 
-            let u = ((t - window_start) / d).clamp(0.0, 1.0);
+            let u = ((t - window_start) / d).clamp(0.0, 1.0) as f32;
             let out_media = project
                 .find_media(v.media_id)
                 .ok_or(ExportError::MediaNotFound(v.media_id))?;
@@ -598,25 +602,33 @@ fn active_layers(project: &Project, t: f64) -> Result<Vec<ActiveLayer>, ExportEr
                 return Err(ExportError::NotVideo(incoming.media_id));
             }
 
-            let mut out_xf = evaluate_transform(v, t);
-            out_xf.opacity *= 1.0 - u;
-            let mut in_xf = evaluate_transform(incoming, incoming.position_secs);
-            in_xf.opacity *= u;
+            let out_xf = evaluate_transform(v, t);
+            let in_xf = evaluate_transform(incoming, incoming.position_secs);
 
             layers.push(ActiveLayer {
                 decoder_key: track.id,
                 path: out_media.path.clone(),
-                source_time: v.source_in_secs + (t - start),
+                source_time: v.source_time_at(t),
                 transform: out_xf,
                 effects: v.effects.clone(),
+                transition: Some(LayerTransition {
+                    kind: tr.kind,
+                    progress: u,
+                    is_incoming: false,
+                }),
             });
             layers.push(ActiveLayer {
                 // Distinct from track.id so FrameRenderer keeps a second decoder open.
                 decoder_key: uuid::Uuid::from_u128(track.id.as_u128() ^ 0xC0_FF_EE_51_u128),
                 path: in_media.path.clone(),
-                source_time: incoming.source_in_secs + (t - window_start),
+                source_time: incoming.source_in_secs + (t - window_start) * incoming.speed_factor(),
                 transform: in_xf,
                 effects: incoming.effects.clone(),
+                transition: Some(LayerTransition {
+                    kind: tr.kind,
+                    progress: u,
+                    is_incoming: true,
+                }),
             });
             handled = true;
             break;
@@ -631,7 +643,7 @@ fn active_layers(project: &Project, t: f64) -> Result<Vec<ActiveLayer>, ExportEr
                 continue;
             }
             let start = v.position_secs;
-            let end = start + (v.source_out_secs - v.source_in_secs);
+            let end = start + v.timeline_duration_secs();
             if t >= start && t < end {
                 let media = project
                     .find_media(v.media_id)
@@ -639,13 +651,13 @@ fn active_layers(project: &Project, t: f64) -> Result<Vec<ActiveLayer>, ExportEr
                 if media.kind != MediaKind::Video && media.kind != MediaKind::Image {
                     return Err(ExportError::NotVideo(v.media_id));
                 }
-                let source_time = v.source_in_secs + (t - start);
                 layers.push(ActiveLayer {
                     decoder_key: track.id,
                     path: media.path.clone(),
-                    source_time,
+                    source_time: v.source_time_at(t),
                     transform: evaluate_transform(v, t),
                     effects: v.effects.clone(),
+                    transition: None,
                 });
                 break;
             }

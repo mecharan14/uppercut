@@ -1,11 +1,12 @@
 # Architecture
 
-Status: **Phase 3.2–3.5 landed.** Export drives FFmpeg subprocess decode/encode with an
-offscreen wgpu compositor; the Tauri app adds a native wgpu preview surface on Windows, now
-backed by a persistent playback engine (see "Playback engine" below). Phase 3 includes
-schema v3 clip transform / keyframes / builtin effects / outgoing crossfade transitions,
-preview transform handles (webview overlay), and a keyframe editor. WASM plugin host and
-asset packs follow later (see [PLAN.md](../PLAN.md)). Manual QA: [qa-checklist.md](qa-checklist.md).
+Status: **Phase 3 complete (1A/2A).** Export drives FFmpeg subprocess decode/encode with an
+offscreen wgpu compositor; the Tauri app adds a native wgpu preview surface on Windows.
+Schema v4 covers clip transform / keyframes / builtins (incl. glitch) / ten WGSL transitions /
+clip speed, plus asset packs and a wasmtime frame-effect host. See
+[asset-pack.md](asset-pack.md) and [plugin-api.md](plugin-api.md). Native preview on
+macOS/Linux remains stubbed; CI runs on Windows/macOS/Linux. Manual QA:
+[qa-checklist.md](qa-checklist.md).
 
 ## Crate graph
 
@@ -326,17 +327,16 @@ or opening a project with many items never slows down `apply_command`/`undo`/`re
 Note: `perceive`'s MCP-facing thumbnail tool (letting an agent request a strip
 independent of the GUI cache) is a follow-up, not yet wired up.
 
-## Plugins (Phase 3+)
+## Plugins (Phase 3)
 
-Phase 3.1 foundation (schema slots + compositor transform hooks) is in; the two plugin
-tiers below are not yet implemented:
+Two tiers are implemented:
 
-- **Asset packs** — data-only (JSON manifest + media), interpreted by `uppercut-core`
-  against existing engine capabilities (transitions-as-shader-params, caption style
-  presets, LUTs, stickers). No sandboxing concerns because there's no code.
-- **WASM plugins** — sandboxed via `wasmtime`, capability-scoped API for frame effects,
-  audio effects, generators/analyzers, and integrations. Design doc to be added under
-  `docs/plugin-api.md` when that milestone starts.
+- **Asset packs** — data-only (`pack.json` + assets). See [asset-pack.md](asset-pack.md).
+  Caption styles and `.cube` LUTs; transition entries alias builtins only.
+- **WASM plugins** — sandboxed via `wasmtime`, frame-effect ABI (`memory` + `process`).
+  See [plugin-api.md](plugin-api.md). Template: `examples/plugins/invert`.
+
+Registry seed: `examples/registry/README.md` (no in-app browser yet).
 
 ## Why this shape
 

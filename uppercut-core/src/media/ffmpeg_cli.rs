@@ -738,6 +738,7 @@ pub fn mix_timeline_audio(
                 fade_in_secs: 0.0,
                 fade_out_secs: 0.0,
                 role: None,
+                speed: 1.0,
             });
             final_clips.push(AudioMixClip {
                 path: ducked_wav.clone(),
@@ -748,6 +749,7 @@ pub fn mix_timeline_audio(
                 fade_in_secs: 0.0,
                 fade_out_secs: 0.0,
                 role: None,
+                speed: 1.0,
             });
             for c in other {
                 final_clips.push(c.clone());
@@ -862,11 +864,31 @@ fn mix_clip_bus(
 fn build_audio_filter(clip: &AudioMixClip, seg_duration: f64) -> String {
     let volume = db_to_linear(clip.gain_db);
     let mut parts = vec![format!("volume={volume:.6}")];
+    let speed = if clip.speed.is_finite() && clip.speed > 0.0 {
+        clip.speed.clamp(0.25, 4.0)
+    } else {
+        1.0
+    };
+    // FFmpeg atempo accepts ~0.5..2.0 per filter; chain for out-of-range speeds.
+    if (speed - 1.0).abs() > 1e-6 {
+        let mut remaining = speed;
+        while remaining > 2.0 + 1e-9 {
+            parts.push("atempo=2.0".into());
+            remaining /= 2.0;
+        }
+        while remaining < 0.5 - 1e-9 {
+            parts.push("atempo=0.5".into());
+            remaining /= 0.5;
+        }
+        parts.push(format!("atempo={remaining:.6}"));
+    }
+    // Fades are in timeline seconds after tempo change.
+    let timeline_dur = seg_duration / speed;
     if clip.fade_in_secs > 0.0 {
         parts.push(format!("afade=t=in:st=0:d={:.6}", clip.fade_in_secs));
     }
     if clip.fade_out_secs > 0.0 {
-        let st = (seg_duration - clip.fade_out_secs).max(0.0);
+        let st = (timeline_dur - clip.fade_out_secs).max(0.0);
         parts.push(format!(
             "afade=t=out:st={st:.6}:d={:.6}",
             clip.fade_out_secs
@@ -905,6 +927,8 @@ pub struct AudioMixClip {
     pub fade_in_secs: f64,
     pub fade_out_secs: f64,
     pub role: Option<TrackAudioRole>,
+    /// Timeline playback rate (pitch-preserving via atempo). Default 1.0.
+    pub speed: f64,
 }
 
 #[cfg(test)]
