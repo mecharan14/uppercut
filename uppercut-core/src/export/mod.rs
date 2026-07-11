@@ -26,6 +26,29 @@ pub enum ExportError {
     MediaNotFound(uuid::Uuid),
     #[error("media {0} is not video")]
     NotVideo(uuid::Uuid),
+    /// Returned when `export_project_with_progress`'s callback returns `false`.
+    #[error("export cancelled")]
+    Cancelled,
+}
+
+/// Coarse stage of an in-flight export — used by GUI progress UI and CLI status lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportPhase {
+    Video,
+    Audio,
+    Mux,
+}
+
+/// Progress snapshot passed to `export_project_with_progress`'s callback.
+///
+/// During `Video`, `frame` is the index about to be rendered (`0..total_frames`).
+/// During `Audio` / `Mux`, `frame == total_frames` (video encode is finished).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExportProgress {
+    pub phase: ExportPhase,
+    pub frame: u64,
+    pub total_frames: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -203,6 +226,21 @@ pub fn export_project(
     output_path: &Path,
     preset: ExportPreset,
 ) -> Result<(), ExportError> {
+    export_project_with_progress(project, output_path, preset, &mut |_| true)
+}
+
+/// Like [`export_project`], but reports progress and supports cooperative cancel.
+///
+/// `on_progress` is called before each video frame and again when entering the audio /
+/// mux phases. Return `false` to cancel: the temp working directory is removed and
+/// [`ExportError::Cancelled`] is returned. Callers that only need a fire-and-forget
+/// export should use [`export_project`].
+pub fn export_project_with_progress(
+    project: &Project,
+    output_path: &Path,
+    preset: ExportPreset,
+    on_progress: &mut dyn FnMut(ExportProgress) -> bool,
+) -> Result<(), ExportError> {
     if !crate::media::ffmpeg_available() {
         return Err(FfmpegCliError::NotFound.into());
     }
@@ -226,8 +264,36 @@ pub fn export_project(
     std::fs::create_dir_all(&temp_dir).map_err(FfmpegCliError::Io)?;
     let temp_video = temp_dir.join("video.mp4");
 
+    let result = export_project_with_progress_inner(
+        project,
+        output_path,
+        settings,
+        duration_secs,
+        total_frames,
+        &temp_dir,
+        &temp_video,
+        on_progress,
+    );
+
+    // Always drop the working dir — on success the MP4 has already been moved/copied out;
+    // on cancel/error this is what kills partial encodes and avoids orphaned temps.
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn export_project_with_progress_inner(
+    project: &Project,
+    output_path: &Path,
+    settings: ExportSettings,
+    duration_secs: f64,
+    total_frames: u64,
+    temp_dir: &Path,
+    temp_video: &Path,
+    on_progress: &mut dyn FnMut(ExportProgress) -> bool,
+) -> Result<(), ExportError> {
     let mut encoder =
-        VideoEncoder::open(&temp_video, settings.width, settings.height, settings.fps)?;
+        VideoEncoder::open(temp_video, settings.width, settings.height, settings.fps)?;
     // `output_fps: Some(settings.fps)` paces each source decoder to the export frame rate
     // (ffmpeg duplicates/drops frames to match) rather than the source's native fps —
     // this also fixes frame-pacing drift for sources whose fps doesn't match the export.
@@ -240,32 +306,55 @@ pub fn export_project(
     )?;
 
     for frame_idx in 0..total_frames {
+        if !on_progress(ExportProgress {
+            phase: ExportPhase::Video,
+            frame: frame_idx,
+            total_frames,
+        }) {
+            return Err(ExportError::Cancelled);
+        }
         let t = frame_idx as f64 / settings.fps;
         let pixels = renderer.render(project, t)?;
         encoder.write_frame(&pixels)?;
     }
     encoder.finish()?;
+    drop(renderer);
 
     let audio_clips = collect_audio_clips(project);
     if audio_clips.is_empty() {
-        std::fs::rename(&temp_video, output_path).or_else(|_| {
-            std::fs::copy(&temp_video, output_path).map_err(FfmpegCliError::Io)?;
+        std::fs::rename(temp_video, output_path).or_else(|_| {
+            std::fs::copy(temp_video, output_path).map_err(FfmpegCliError::Io)?;
             Ok::<(), FfmpegCliError>(())
         })?;
-    } else {
-        let temp_audio = temp_dir.join("audio.wav");
-        let duck = duck_settings(project);
-        mix_timeline_audio(
-            &audio_clips,
-            project.settings.sample_rate,
-            duration_secs,
-            &temp_audio,
-            duck,
-        )?;
-        mux_video_audio(&temp_video, &temp_audio, output_path)?;
+        return Ok(());
     }
 
-    std::fs::remove_dir_all(&temp_dir).ok();
+    if !on_progress(ExportProgress {
+        phase: ExportPhase::Audio,
+        frame: total_frames,
+        total_frames,
+    }) {
+        return Err(ExportError::Cancelled);
+    }
+
+    let temp_audio = temp_dir.join("audio.wav");
+    let duck = duck_settings(project);
+    mix_timeline_audio(
+        &audio_clips,
+        project.settings.sample_rate,
+        duration_secs,
+        &temp_audio,
+        duck,
+    )?;
+
+    if !on_progress(ExportProgress {
+        phase: ExportPhase::Mux,
+        frame: total_frames,
+        total_frames,
+    }) {
+        return Err(ExportError::Cancelled);
+    }
+    mux_video_audio(temp_video, &temp_audio, output_path)?;
     Ok(())
 }
 
@@ -567,6 +656,63 @@ mod tests {
         assert!(output_path.is_file());
         let meta = std::fs::metadata(&output_path).unwrap();
         assert!(meta.len() > 0);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_project_with_progress_cancel_returns_cancelled() {
+        if !crate::media::ffmpeg_available() {
+            eprintln!("skipping cancel export test: ffmpeg not on PATH");
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("uppercut-cancel-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let video_path = dir.join("src.mp4");
+        let output_path = dir.join("out.mp4");
+        generate_test_video(&video_path);
+
+        let mut project = Project::new("t", Settings::default());
+        let media_id = uuid::Uuid::new_v4();
+        project.media.push(crate::project::MediaItem {
+            id: media_id,
+            path: video_path.clone(),
+            kind: MediaKind::Video,
+            duration_secs: Some(1.0),
+            width: Some(320),
+            height: Some(240),
+            fps: Some(30.0),
+        });
+        let track = crate::project::Track::new(TrackKind::Video, "V1");
+        project.tracks.push(track);
+        project.tracks[0]
+            .clips
+            .push(Clip::Video(crate::project::MediaClip {
+                id: uuid::Uuid::new_v4(),
+                media_id,
+                position_secs: 0.0,
+                source_in_secs: 0.0,
+                source_out_secs: 0.5,
+                gain_db: 0.0,
+                enabled: true,
+                fade_in_secs: 0.0,
+                fade_out_secs: 0.0,
+            }));
+
+        let err = export_project_with_progress(
+            &project,
+            &output_path,
+            ExportPreset::Custom {
+                width: 320,
+                height: 240,
+                fps: 30.0,
+            },
+            &mut |_| false,
+        )
+        .expect_err("cancel");
+        assert!(matches!(err, ExportError::Cancelled));
+        assert!(!output_path.exists());
 
         std::fs::remove_dir_all(&dir).ok();
     }

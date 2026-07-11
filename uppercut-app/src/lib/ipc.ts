@@ -48,6 +48,21 @@ export interface WaveformReadyPayload {
   bucket_secs: number;
 }
 
+export type ExportPhase = "video" | "audio" | "mux";
+
+export interface ExportProgressPayload {
+  phase: ExportPhase;
+  frame: number;
+  total_frames: number;
+  fraction: number;
+}
+
+/** Shorthand presets or a full `ExportPreset` JSON value (e.g. custom w/h/fps). */
+export type ExportPresetArg =
+  | "tiktok"
+  | "youtube"
+  | { custom: { width: number; height: number; fps: number } };
+
 export interface MediaAssetsPayload {
   thumbnails?: ThumbnailsReadyPayload;
   waveform?: WaveformReadyPayload;
@@ -97,8 +112,15 @@ export function redo(): Promise<HistoryStatus> {
 
 // ---- Export ----
 
-export function exportProject(outputPath: string, preset: string): Promise<void> {
+export function exportProject(
+  outputPath: string,
+  preset: ExportPresetArg | Record<string, unknown>,
+): Promise<void> {
   return invoke("export_project", { outputPath, preset });
+}
+
+export function cancelExport(): Promise<void> {
+  return invoke("cancel_export");
 }
 
 // ---- Media assets (thumbnails / waveforms) ----
@@ -169,6 +191,11 @@ export function onThumbnailsReady(cb: (payload: ThumbnailsReadyPayload) => void)
 
 export function onWaveformReady(cb: (payload: WaveformReadyPayload) => void): () => void {
   const unlisten = listen<WaveformReadyPayload>("media:waveform-ready", (e) => cb(e.payload));
+  return () => void unlisten.then((f) => f());
+}
+
+export function onExportProgress(cb: (payload: ExportProgressPayload) => void): () => void {
+  const unlisten = listen<ExportProgressPayload>("export:progress", (e) => cb(e.payload));
   return () => void unlisten.then((f) => f());
 }
 

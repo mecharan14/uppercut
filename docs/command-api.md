@@ -200,6 +200,12 @@ Renders the current `Project` timeline to `output_path` using `preset` (e.g.
 `TikTok9x16`, `Youtube16x9`, or a `Custom { width, height, fps }` variant). Muxes mixed
 audio (with fades and optional music ducking) and burns caption clips.
 
+`Export` does not mutate `Project`. Progress / cancel for interactive clients go through
+`uppercut_core::export::export_project_with_progress` (GUI Tauri command + CLI status
+line); `apply_command(Command::Export)` and MCP still call the fire-and-forget
+`export_project` wrapper. Returning `false` from the progress callback yields
+`ExportError::Cancelled` and removes the export temp directory.
+
 ## Batch application (GUI rebuild M3)
 
 The Tauri `apply_commands` command takes `Vec<Command>` and applies them in order against
@@ -230,3 +236,5 @@ a command for a feature that has no schema representation yet.
   `SetTrackFlags`, `RenameTrack`, `DeleteTrack`, `SetClipEnabled`.
 - **GUI rebuild M3** (non-breaking): `AddTrack` gained an optional `id` field (server
   still generates one when omitted); added the Tauri-layer `apply_commands` batch API.
+- **GUI rebuild M6** (non-breaking): `export_project_with_progress` + `ExportError::Cancelled`
+  for cooperative cancel; GUI emits `export:progress` (~10 Hz) and exposes `cancel_export`.

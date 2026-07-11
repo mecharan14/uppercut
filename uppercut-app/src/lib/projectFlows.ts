@@ -3,7 +3,6 @@
 
 import * as ipc from "./ipc";
 import { useEditorStore } from "../store/editorStore";
-import { fileName } from "./format";
 
 function isMediaPath(path: string): boolean {
   return /\.(mp4|mov|mkv|webm|avi|mp3|wav|m4a|aac)$/i.test(path);
@@ -66,18 +65,4 @@ export async function openExistingProjectFlow(): Promise<void> {
   if (!path) return;
   await store.loadProjectFromPath(path);
   store.toast("Project opened", "success");
-}
-
-export async function runExportFlow(preset: string): Promise<void> {
-  const store = useEditorStore.getState();
-  if (!store.project) return;
-  const outputPath = await ipc.pickExportSavePath(`${store.project.name}.mp4`);
-  if (!outputPath) return;
-  try {
-    store.toast("Exporting… this may take a minute", "info");
-    await ipc.exportProject(outputPath, preset);
-    store.toast(`Exported to ${fileName(outputPath)}`, "success");
-  } catch (e) {
-    store.toast(`Export failed: ${e instanceof Error ? e.message : String(e)}`, "error");
-  }
 }

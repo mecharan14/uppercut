@@ -5,12 +5,15 @@ mod preview;
 use parking_lot::Mutex;
 use playback::PlaybackEngine;
 use preview::{NativeWindow, PreviewBounds, PreviewPanel};
+use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 use uppercut_core::{
-    apply_command as apply_core_command, commands::ExportPreset, project::Project, Command,
-    CommandOutcome,
+    apply_command as apply_core_command, commands::ExportPreset, export_project_with_progress,
+    project::Project, Command, CommandOutcome, ExportError, ExportPhase, ExportProgress,
 };
 
 struct Session {
@@ -86,6 +89,9 @@ pub struct AppState {
     playback: PlaybackEngine,
     history: Mutex<History>,
     revision: AtomicU64,
+    /// Cooperative cancel flag for the in-flight export (M6). Cleared at export start;
+    /// `cancel_export` sets it so the progress callback returns `false`.
+    export_cancel: Arc<AtomicBool>,
     /// Serializes every whole-project mutation (`apply_command`, `apply_commands`, `undo`,
     /// `redo`, and project open/create/quick-start) end-to-end — snapshot, compute,
     /// history push, session write-back, and save all happen while this is held. Without
@@ -106,6 +112,7 @@ impl AppState {
             playback: PlaybackEngine::new(),
             history: Mutex::new(History::new()),
             revision: AtomicU64::new(0),
+            export_cancel: Arc::new(AtomicBool::new(false)),
             edit_lock: tauri::async_runtime::Mutex::new(()),
         }
     }
@@ -552,32 +559,94 @@ async fn redo(app: AppHandle, state: State<'_, AppState>) -> Result<HistoryStatu
     Ok(state.emit_project_changed(&app))
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct ExportProgressEvent {
+    phase: ExportPhase,
+    frame: u64,
+    total_frames: u64,
+    /// 0.0–1.0 overall progress (video frames dominate; audio/mux sit at 1.0).
+    fraction: f64,
+}
+
+fn parse_export_preset(preset: &serde_json::Value) -> Result<ExportPreset, String> {
+    match preset {
+        serde_json::Value::String(s) => match s.as_str() {
+            "tiktok" => Ok(ExportPreset::TikTok9x16),
+            "youtube" => Ok(ExportPreset::Youtube16x9),
+            other => {
+                serde_json::from_str(other).map_err(|e| format!("unknown preset '{other}': {e}"))
+            }
+        },
+        other => serde_json::from_value(other.clone())
+            .map_err(|e| format!("invalid export preset JSON: {e}")),
+    }
+}
+
+/// Render the open project to `output_path`. Clones the project and never holds the
+/// session/`edit_lock` during encode. Emits `export:progress` (~10 Hz) while running;
+/// call `cancel_export` to cooperatively abort (temp dir cleaned up).
 #[tauri::command]
 async fn export_project(
+    app: AppHandle,
     state: State<'_, AppState>,
     output_path: String,
-    preset: String,
+    preset: serde_json::Value,
 ) -> Result<(), String> {
-    let preset = match preset.as_str() {
-        "tiktok" => ExportPreset::TikTok9x16,
-        "youtube" => ExportPreset::Youtube16x9,
-        other => return Err(format!("unknown preset '{other}'")),
-    };
-    let mut project = state.with_session(|s| Ok(s.project.clone()))?;
+    let preset = parse_export_preset(&preset)?;
+    // Clone under a short lock — export must not hold session/edit_lock for the duration.
+    let project = state.with_session(|s| Ok(s.project.clone()))?;
+    state.export_cancel.store(false, Ordering::SeqCst);
+    let cancel = Arc::clone(&state.export_cancel);
 
     tauri::async_runtime::spawn_blocking(move || {
-        apply_core_command(
-            &mut project,
-            Command::Export {
-                output_path,
-                preset,
+        let mut last_emit = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        let result = export_project_with_progress(
+            &project,
+            std::path::Path::new(&output_path),
+            preset,
+            &mut |p: ExportProgress| {
+                if cancel.load(Ordering::SeqCst) {
+                    return false;
+                }
+                let force =
+                    p.phase != ExportPhase::Video || p.frame + 1 >= p.total_frames || p.frame == 0;
+                if force || last_emit.elapsed() >= Duration::from_millis(100) {
+                    last_emit = Instant::now();
+                    let fraction = if p.total_frames == 0 {
+                        0.0
+                    } else {
+                        (p.frame as f64 / p.total_frames as f64).clamp(0.0, 1.0)
+                    };
+                    let _ = app.emit(
+                        "export:progress",
+                        ExportProgressEvent {
+                            phase: p.phase,
+                            frame: p.frame,
+                            total_frames: p.total_frames,
+                            fraction,
+                        },
+                    );
+                }
+                true
             },
-        )
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+        );
+        match result {
+            Ok(()) => Ok(()),
+            Err(ExportError::Cancelled) => Err("export cancelled".into()),
+            Err(e) => Err(e.to_string()),
+        }
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Ask the in-flight export (if any) to stop at the next progress checkpoint.
+#[tauri::command]
+async fn cancel_export(state: State<'_, AppState>) -> Result<(), String> {
+    state.export_cancel.store(true, Ordering::SeqCst);
+    Ok(())
 }
 
 /// Deliberately a *sync* command, not `async fn`. Tauri dispatches sync commands on the
@@ -692,6 +761,7 @@ pub fn run() {
             undo,
             redo,
             export_project,
+            cancel_export,
             set_preview_bounds,
             play,
             pause,

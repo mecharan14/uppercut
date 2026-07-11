@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 use std::fs;
 use std::path::PathBuf;
 use uppercut_core::commands::{Command, ExportPreset};
+use uppercut_core::export::export_project_with_progress;
 use uppercut_core::project::{Project, Settings};
 
 #[derive(Parser)]
@@ -134,19 +135,28 @@ fn main() -> Result<()> {
             output,
             preset,
         } => {
-            let mut project = load_project(&path)?;
+            // Export is a pure render of a cloned project (no project mutation), so we call
+            // `export_project_with_progress` directly for a live frame counter. Scripted
+            // `Command::Export` via `apply` still goes through `apply_command`.
+            let project = load_project(&path)?;
             let preset = match preset.as_str() {
                 "tiktok" => ExportPreset::TikTok9x16,
                 "youtube" => ExportPreset::Youtube16x9,
                 other => bail!("unknown preset '{other}', expected 'tiktok' or 'youtube'"),
             };
-            apply_and_report(
-                &mut project,
-                Command::Export {
-                    output_path: output.to_string_lossy().to_string(),
-                    preset,
-                },
-            )?;
+            let mut last_phase = None;
+            export_project_with_progress(&project, &output, preset, &mut |p| {
+                if last_phase != Some(p.phase) {
+                    if last_phase.is_some() {
+                        eprintln!();
+                    }
+                    last_phase = Some(p.phase);
+                }
+                eprint!("\rexport {:?}: {}/{}    ", p.phase, p.frame, p.total_frames);
+                true
+            })?;
+            eprintln!();
+            println!("exported {}", output.display());
         }
     }
 

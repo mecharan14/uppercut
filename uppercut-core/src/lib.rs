@@ -14,8 +14,9 @@ pub mod project;
 pub use audio::{TtsError, VoiceoverProvider};
 pub use commands::{apply_command, Command, CommandError, CommandOutcome};
 pub use export::{
-    export_project, mix_timeline_audio_range_to_file, mix_timeline_audio_segment, render_frame_at,
-    timeline_duration, DecodeOptions, ExportError, ExportSettings, FrameRenderer,
+    export_project, export_project_with_progress, mix_timeline_audio_range_to_file,
+    mix_timeline_audio_segment, render_frame_at, timeline_duration, DecodeOptions, ExportError,
+    ExportPhase, ExportProgress, ExportSettings, FrameRenderer,
 };
 pub use media::{generate_thumbnail_strip, ReaderOptions, ThumbnailStrip};
 pub use perceive::{
