@@ -17,8 +17,15 @@ const SHAPE_INPUT: i32 = 2;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Parent {
-    pub display: *mut Display,
+    /// `*mut Display` as usize so preview state stays `Send` for Tauri `AppState`.
+    pub display: usize,
     pub window: u32,
+}
+
+impl Parent {
+    fn display_ptr(self) -> *mut Display {
+        self.display as *mut Display
+    }
 }
 
 pub struct Preview {
@@ -57,7 +64,12 @@ impl Preview {
         self.child = Some(child);
 
         if self.gfx.is_none() {
-            match preview_gfx_state(self.parent.display, child, bounds.width, bounds.height) {
+            match preview_gfx_state(
+                self.parent.display_ptr(),
+                child,
+                bounds.width,
+                bounds.height,
+            ) {
                 Ok(gfx) => self.gfx = Some(gfx),
                 Err(e) => {
                     eprintln!("preview: GfxState::new failed: {e}");
@@ -68,7 +80,7 @@ impl Preview {
             if let Err(e) = gfx.resize(bounds.width, bounds.height) {
                 eprintln!("preview: resize failed ({e}), recreating GfxState");
                 self.gfx = Some(preview_gfx_state(
-                    self.parent.display,
+                    self.parent.display_ptr(),
                     child,
                     bounds.width,
                     bounds.height,
@@ -140,16 +152,17 @@ fn ensure_child_window(
     width: u32,
     height: u32,
 ) -> Result<u32, PreviewError> {
+    let display = parent.display_ptr();
     unsafe {
         if let Some(child) = existing {
-            XMoveResizeWindow(parent.display, child as Window, x, y, width, height);
-            set_click_through(parent.display, child);
-            XFlush(parent.display);
+            XMoveResizeWindow(display, child as Window, x, y, width, height);
+            set_click_through(display, child);
+            XFlush(display);
             return Ok(child);
         }
 
         let child = XCreateSimpleWindow(
-            parent.display,
+            display,
             parent.window as Window,
             x,
             y,
@@ -163,9 +176,9 @@ fn ensure_child_window(
             return Err(PreviewError::Wgpu("XCreateSimpleWindow failed".into()));
         }
 
-        set_click_through(parent.display, child as u32);
-        XMapWindow(parent.display, child);
-        XFlush(parent.display);
+        set_click_through(display, child as u32);
+        XMapWindow(display, child);
+        XFlush(display);
         Ok(child as u32)
     }
 }
@@ -181,9 +194,10 @@ fn set_click_through(display: *mut Display, window: u32) {
 impl Drop for Preview {
     fn drop(&mut self) {
         if let Some(child) = self.child {
+            let display = self.parent.display_ptr();
             unsafe {
-                XDestroyWindow(self.parent.display, child as Window);
-                XFlush(self.parent.display);
+                XDestroyWindow(display, child as Window);
+                XFlush(display);
             }
         }
     }

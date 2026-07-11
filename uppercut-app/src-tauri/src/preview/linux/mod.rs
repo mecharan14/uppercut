@@ -2,23 +2,19 @@
 //!
 //! Selected from the raw window/display handle Tauri exposes for the main webview.
 //! X11 uses a child X window; Wayland uses a `wl_subsurface` of the GTK parent surface.
+//!
+//! Foreign display/surface pointers are stored as `usize` (same pattern as HWND/NSView on
+//! other platforms) so `PreviewPanel` stays `Send` and can live in Tauri `AppState`.
 
 mod wayland;
 mod x11;
 
 use super::{PreviewBounds, PreviewError};
-use std::os::raw::c_void;
 
 #[derive(Clone, Copy, Debug)]
 pub enum NativeWindow {
-    X11 {
-        display: *mut ::x11::xlib::Display,
-        window: u32,
-    },
-    Wayland {
-        display: *mut c_void,
-        surface: *mut c_void,
-    },
+    X11 { display: usize, window: u32 },
+    Wayland { display: usize, surface: usize },
 }
 
 pub enum PlatformPreview {

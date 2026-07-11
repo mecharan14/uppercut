@@ -29,8 +29,19 @@ use wayland_client::{
 
 #[derive(Clone, Copy, Debug)]
 pub struct Parent {
-    pub display: *mut c_void,
-    pub surface: *mut c_void,
+    /// `*mut wl_display` / `*mut wl_surface` as usize so preview state stays `Send`.
+    pub display: usize,
+    pub surface: usize,
+}
+
+impl Parent {
+    fn display_ptr(self) -> *mut c_void {
+        self.display as *mut c_void
+    }
+
+    fn surface_ptr(self) -> *mut c_void {
+        self.surface as *mut c_void
+    }
 }
 
 /// Event-queue state for Wayland setup. All events are no-ops; we only need the
@@ -153,14 +164,16 @@ impl Preview {
     }
 
     fn create_subsurface(&mut self, bounds: PreviewBounds) -> Result<(), PreviewError> {
-        if self.parent.display.is_null() || self.parent.surface.is_null() {
+        let display = self.parent.display_ptr();
+        let surface = self.parent.surface_ptr();
+        if display.is_null() || surface.is_null() {
             return Err(PreviewError::Wgpu(
                 "wayland parent display/surface is null".into(),
             ));
         }
 
         // Guest connection into GTK's existing wl_display — we must not close it on drop.
-        let backend = unsafe { Backend::from_foreign_display(self.parent.display.cast()) };
+        let backend = unsafe { Backend::from_foreign_display(display.cast()) };
         let conn = Connection::from_backend(backend);
 
         let (globals, mut event_queue) = registry_queue_init::<State>(&conn)
@@ -176,7 +189,7 @@ impl Preview {
 
         // Wrap the foreign GTK parent surface without taking ownership.
         let parent_id = unsafe {
-            ObjectId::from_ptr(WlSurface::interface(), self.parent.surface.cast())
+            ObjectId::from_ptr(WlSurface::interface(), surface.cast())
                 .map_err(|e| PreviewError::Wgpu(format!("parent surface ObjectId: {e}")))?
         };
         let parent_surface = WlSurface::from_id(&conn, parent_id)
@@ -198,7 +211,7 @@ impl Preview {
             .map_err(|e| PreviewError::Wgpu(format!("wayland flush: {e}")))?;
 
         let gfx = preview_gfx_state(
-            self.parent.display,
+            display,
             child.id().as_ptr().cast(),
             bounds.width,
             bounds.height,
@@ -228,7 +241,7 @@ impl Preview {
                     .as_ptr()
                     .cast();
                 self.gfx = Some(preview_gfx_state(
-                    self.parent.display,
+                    self.parent.display_ptr(),
                     child_ptr,
                     bounds.width,
                     bounds.height,

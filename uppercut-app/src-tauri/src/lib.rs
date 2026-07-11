@@ -205,10 +205,9 @@ fn native_window_from_app(app: &AppHandle) -> Result<NativeWindow, String> {
                     let display_ptr = d
                         .display
                         .ok_or_else(|| "Xlib display pointer is null".to_string())?
-                        .as_ptr()
-                        .cast();
+                        .as_ptr();
                     Ok(NativeWindow::X11 {
-                        display: display_ptr,
+                        display: display_ptr as usize,
                         window: h.window as u32,
                     })
                 }
@@ -224,8 +223,8 @@ fn native_window_from_app(app: &AppHandle) -> Result<NativeWindow, String> {
                 .map_err(|e| format!("display handle: {e}"))?;
             match display.as_raw() {
                 RawDisplayHandle::Wayland(d) => Ok(NativeWindow::Wayland {
-                    display: d.display.as_ptr().cast(),
-                    surface: w.surface.as_ptr().cast(),
+                    display: d.display.as_ptr() as usize,
+                    surface: w.surface.as_ptr() as usize,
                 }),
                 other => Err(format!(
                     "Wayland window handle without Wayland display: {other:?}"
