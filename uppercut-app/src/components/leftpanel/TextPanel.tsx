@@ -3,6 +3,7 @@ import { useEditorStore } from "../../store/editorStore";
 import { addCaption, generateCaptions } from "../../lib/commands";
 import { fileName } from "../../lib/format";
 import { CAPTION_STYLES } from "../../lib/types";
+import { CaptionStyleGallery } from "../CaptionStyleGallery";
 
 export function TextPanel() {
   const project = useEditorStore((s) => s.project);
@@ -31,9 +32,10 @@ export function TextPanel() {
   async function runAutoCaptions() {
     if (!autoMediaId || !project) return;
     setAutoBusy(true);
+    toast("Transcribing… this may take a moment", "info");
     try {
       const track = await ensureTrack("caption", "Captions");
-      const ok = await dispatch(generateCaptions(autoMediaId, track.id, style));
+      const ok = await dispatch(generateCaptions(autoMediaId, track.id, style, playhead));
       if (ok) toast("Auto captions generated", "success");
     } finally {
       setAutoBusy(false);
@@ -50,13 +52,7 @@ export function TextPanel() {
         </div>
         <div className="field">
           <label>Style</label>
-          <select value={style} onChange={(e) => setStyle(e.target.value)}>
-            {CAPTION_STYLES.map((s) => (
-              <option key={s} value={s}>
-                {s.replace(/-/g, " ")}
-              </option>
-            ))}
-          </select>
+          <CaptionStyleGallery value={style} onChange={setStyle} />
         </div>
         <div className="inspector-actions">
           <button type="button" className="btn-primary" disabled={!project || !text.trim()} onClick={() => void addTextClip()}>

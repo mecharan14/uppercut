@@ -69,6 +69,32 @@ body {
   flex: 1;
 }
 
+.ratio-select {
+  appearance: none;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  color: var(--text-1);
+  font: inherit;
+  font-size: var(--fs-12);
+  padding: 0.35rem 1.5rem 0.35rem 0.55rem;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
+  background-position: calc(100% - 12px) 55%, calc(100% - 8px) 55%;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+
+.ratio-select:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.ratio-select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .project-chip {
   display: flex;
   align-items: center;
@@ -432,8 +458,27 @@ body {
 }
 
 .preview-host.has-clips .hint {
-  opacity: 0.55;
+  opacity: 0.45;
   font-size: 0.85rem;
+}
+
+.preview-host.has-clips.is-playing .hint {
+  display: none;
+}
+
+.preview-column.preview-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: #000;
+}
+
+.preview-column.preview-fullscreen .preview-host {
+  flex: 1;
+}
+
+.preview-column.preview-fullscreen .transport-bar {
+  border-top: 1px solid var(--border);
 }
 
 .preview-host.loading .hint .icon.spinner {
@@ -485,12 +530,40 @@ body {
   border-top: 1px solid var(--border);
 }
 
+.transport-bar .spacer {
+  flex: 1;
+}
+
+.transport-step {
+  width: 28px;
+  height: 28px;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
 .timecode {
+  width: 5.75rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-s);
+  color: var(--text-1);
   font-variant-numeric: tabular-nums;
   font-size: 0.9rem;
   font-weight: 600;
   letter-spacing: 0.04em;
-  min-width: 88px;
+  padding: 2px 6px;
+  text-align: center;
+}
+
+.timecode:hover,
+.timecode:focus {
+  border-color: var(--border-strong);
+  background: var(--bg-2);
+  outline: none;
+}
+
+.timecode:disabled {
+  opacity: 0.5;
 }
 
 .timecode-sub {
@@ -1102,4 +1175,86 @@ dialog menu {
   height: 1px;
   background: var(--border);
   margin: 4px 0;
+}
+
+/* —— Caption style gallery (M5) —— */
+.style-gallery {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.style-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 0.55rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--bg-2);
+  color: var(--text-2);
+  cursor: pointer;
+  font: inherit;
+}
+
+.style-card:hover {
+  border-color: var(--border-strong);
+  color: var(--text-1);
+}
+
+.style-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+  color: var(--text-1);
+}
+
+.style-preview {
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.style-tiktok-bold-yellow .style-preview {
+  color: #ffe566;
+  text-shadow: 0 1px 0 #000, 1px 1px 0 #000;
+}
+
+.style-tiktok-minimal .style-preview {
+  color: #fff;
+  font-weight: 500;
+}
+
+.style-tiktok-box .style-preview {
+  background: #111;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.style-youtube-lower-thirds .style-preview {
+  color: #fff;
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 2px;
+}
+
+.style-label {
+  font-size: 0.65rem;
+  text-align: center;
+  color: var(--text-3);
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.toggle-row label {
+  margin: 0;
+}
+
+.btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
 }

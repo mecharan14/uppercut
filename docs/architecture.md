@@ -112,10 +112,14 @@ canvas timeline with drag/trim/split/razor/snap/zoom/fit, DOM `TrackHeaders` col
 guard (hatched overlay; CLI/MCP can still edit a locked track by design), bin→timeline
 drag with a ghost preview and CapCut-style auto-track-on-drop, right-click `ContextMenu`
 (split/duplicate/copy/paste/delete/ripple-delete/enable-disable), full keymap (see
-`App.tsx`'s `onKeyDown`), transport with audio scrub, tab rail (Media/Audio/Text live;
-Stickers/Effects/Transitions/Filters/Adjustment stubbed for Phase 3), caption/audio clip
-inspectors, export dialog. Thumbnails/waveforms are M4. macOS/Linux preview surfaces land
-in Phase 3.
+`App.tsx`'s `onKeyDown`), transport with editable timecode + ±1 frame buttons + fullscreen
+preview (Esc exits; bounds recompute), aspect-ratio quick-switch (`RatioMenu` →
+`SetProjectSettings`, including Original from first video media dims), tab rail
+(Media/Audio/Text live; Stickers/Effects/Transitions/Filters/Adjustment stubbed for
+Phase 3), inspectors (video/audio clip with gain/fades/enable/trim, caption style gallery,
+project canvas settings), Text panel auto-captions + Audio panel TTS voiceover, export
+dialog. Thumbnails/waveforms are M4; export progress UI is M6. macOS/Linux preview
+surfaces land in Phase 3.
 
 Tauri commands: `quick_start_project`, `new_project`, `open_project`, `save_project`,
 `get_project`, `apply_command`, `apply_commands`, `undo`, `redo`, `export_project`, `play`,

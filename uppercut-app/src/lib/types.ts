@@ -90,6 +90,24 @@ export const CAPTION_STYLES = [
   "youtube-lower-thirds",
 ] as const;
 
+export const CAPTION_STYLE_META: Record<
+  (typeof CAPTION_STYLES)[number],
+  { label: string; preview: string }
+> = {
+  "tiktok-bold-yellow": { label: "Bold yellow", preview: "Aa" },
+  "tiktok-minimal": { label: "Minimal", preview: "Aa" },
+  "tiktok-box": { label: "Box", preview: "Aa" },
+  "youtube-lower-thirds": { label: "Lower thirds", preview: "Aa" },
+};
+
+export const ASPECT_PRESETS = [
+  { id: "9:16", label: "9:16", width: 1080, height: 1920 },
+  { id: "16:9", label: "16:9", width: 1920, height: 1080 },
+  { id: "1:1", label: "1:1", width: 1080, height: 1080 },
+  { id: "4:3", label: "4:3", width: 1440, height: 1080 },
+  { id: "3:4", label: "3:4", width: 1080, height: 1440 },
+] as const;
+
 export const TRACK_KINDS = ["video", "audio", "caption"] as const;
 
 export interface Selection {

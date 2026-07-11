@@ -147,6 +147,13 @@ fn parse_scenes(stderr: &str, threshold: f64) -> Result<Vec<SceneCut>, AnalysisE
 }
 
 /// Downsampled peak envelope for waveform display / agent perception.
+///
+/// Files with no audio stream return empty `peaks` (not an error) so callers can skip
+/// drawing a waveform without treating silent video as a hard failure.
+///
+/// Sample rate is chosen so we decode roughly a handful of samples per display bucket
+/// instead of a fixed 8 kHz PCM dump of the whole file (which dominates import time on
+/// long clips).
 pub fn audio_peaks(path: &Path, buckets: u32) -> Result<AudioPeaks, AnalysisError> {
     if !ffmpeg_available() {
         return Err(FfmpegCliError::NotFound.into());
@@ -155,13 +162,28 @@ pub fn audio_peaks(path: &Path, buckets: u32) -> Result<AudioPeaks, AnalysisErro
         return Err(AnalysisError::Parse("buckets must be > 0".into()));
     }
 
-    let duration = media_duration(path);
+    let duration = media_duration(path).max(0.1);
     let bucket_secs = duration / buckets as f64;
+
+    // ~6 PCM samples per UI bucket is enough for a max-abs envelope. Cap the rate so
+    // short clips still get enough resolution and long clips stay cheap to decode.
+    let target_samples = (buckets as f64 * 6.0).max(buckets as f64);
+    let sample_rate = ((target_samples / duration).ceil() as u32).clamp(50, 4_000);
 
     let output = Command::new(ffmpeg_path()?)
         .args(["-hide_banner", "-loglevel", "error", "-i"])
         .arg(path)
-        .args(["-vn", "-ac", "1", "-ar", "8000", "-f", "f32le", "pipe:1"])
+        .args([
+            "-vn",
+            "-sn",
+            "-ac",
+            "1",
+            "-ar",
+            &sample_rate.to_string(),
+            "-f",
+            "f32le",
+            "pipe:1",
+        ])
         .output()
         .map_err(|e| FfmpegCliError::SpawnFailed {
             tool: "ffmpeg",
@@ -169,7 +191,26 @@ pub fn audio_peaks(path: &Path, buckets: u32) -> Result<AudioPeaks, AnalysisErro
         })?;
 
     if !output.status.success() {
-        return Err(FfmpegCliError::NonZeroExit(output.status.code().unwrap_or(-1)).into());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        // Silent / video-only sources: treat as empty peaks rather than a hard error.
+        if stderr.contains("does not contain any stream")
+            || stderr.contains("Output file does not contain any stream")
+            || stderr.contains("matches no streams")
+        {
+            return Ok(AudioPeaks {
+                bucket_secs,
+                peaks: Vec::new(),
+            });
+        }
+        if stderr.is_empty() {
+            return Err(FfmpegCliError::NonZeroExit(output.status.code().unwrap_or(-1)).into());
+        }
+        return Err(FfmpegCliError::BadOutput(format!(
+            "ffmpeg exited with status {}: {stderr}",
+            output.status.code().unwrap_or(-1)
+        ))
+        .into());
     }
 
     let samples: &[f32] = bytemuck::cast_slice(&output.stdout);

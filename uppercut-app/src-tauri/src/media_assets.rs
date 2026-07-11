@@ -16,9 +16,11 @@ use tauri::{AppHandle, Emitter, Manager};
 use uppercut_core::project::MediaKind;
 use uppercut_core::{audio_peaks, generate_thumbnail_strip};
 
-const MAX_TILES: u32 = 60;
-const TILE_HEIGHT: u32 = 128;
-const WAVEFORM_BUCKETS: u32 = 2000;
+const MAX_TILES: u32 = 24;
+const TILE_HEIGHT: u32 = 72;
+const WAVEFORM_BUCKETS: u32 = 512;
+/// Bumped when generation params change so stale heavy strips/peaks are rebuilt once.
+const CACHE_VERSION: &str = "v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThumbInfo {
@@ -89,12 +91,17 @@ fn cache_key(path: &Path) -> String {
     let mut hasher = DefaultHasher::new();
     path.hash(&mut hasher);
     mtime.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    format!("{CACHE_VERSION}-{:016x}", hasher.finish())
 }
 
 fn read_cached(meta_path: &Path) -> Option<CachedAssets> {
     let data = std::fs::read_to_string(meta_path).ok()?;
     serde_json::from_str(&data).ok()
+}
+
+fn write_cached(meta_path: &Path, cached: &CachedAssets) -> Result<(), String> {
+    let data = serde_json::to_string(cached).map_err(|e| e.to_string())?;
+    std::fs::write(meta_path, data).map_err(|e| e.to_string())
 }
 
 fn to_payload(dir: &Path, cached: &CachedAssets, media_id: &str) -> MediaAssetsPayload {
@@ -125,14 +132,21 @@ fn to_payload(dir: &Path, cached: &CachedAssets, media_id: &str) -> MediaAssetsP
     }
 }
 
-fn emit_ready(app: &AppHandle, media_id: &str, dir: &Path, cached: &CachedAssets) {
-    let payload = to_payload(dir, cached, media_id);
-    if let Some(thumbnails) = payload.thumbnails {
+fn emit_thumbnails(app: &AppHandle, media_id: &str, dir: &Path, cached: &CachedAssets) {
+    if let Some(thumbnails) = to_payload(dir, cached, media_id).thumbnails {
         let _ = app.emit("media:thumbnails-ready", thumbnails);
     }
-    if let Some(waveform) = payload.waveform {
+}
+
+fn emit_waveform(app: &AppHandle, media_id: &str, dir: &Path, cached: &CachedAssets) {
+    if let Some(waveform) = to_payload(dir, cached, media_id).waveform {
         let _ = app.emit("media:waveform-ready", waveform);
     }
+}
+
+fn emit_ready(app: &AppHandle, media_id: &str, dir: &Path, cached: &CachedAssets) {
+    emit_thumbnails(app, media_id, dir, cached);
+    emit_waveform(app, media_id, dir, cached);
 }
 
 fn generate_assets_blocking(
@@ -150,45 +164,52 @@ fn generate_assets_blocking(
         return Ok(());
     }
 
-    let mut strip_file = None;
-    let mut thumb = None;
+    // Waveform runs in parallel with the filmstrip so wall-clock time is closer to
+    // max(thumbs, peaks) than sum. Thumbnails emit as soon as the strip is ready so
+    // the timeline paints before peaks finish.
+    let need_wave = kind != MediaKind::Image;
+    let wave_path = path.to_path_buf();
+    let wave_handle = need_wave.then(|| {
+        std::thread::spawn(move || match audio_peaks(&wave_path, WAVEFORM_BUCKETS) {
+            Ok(p) if !p.peaks.is_empty() => (p.peaks, p.bucket_secs),
+            Ok(_) => (Vec::new(), 0.0),
+            Err(e) => {
+                eprintln!("media assets: waveform generation failed: {e}");
+                (Vec::new(), 0.0)
+            }
+        })
+    });
+
+    let mut cached = CachedAssets::default();
     if kind == MediaKind::Video {
         let strip_path = dir.join(format!("{key}.png"));
         match generate_thumbnail_strip(path, &strip_path, MAX_TILES, TILE_HEIGHT) {
             Ok(strip) => {
-                strip_file = Some(format!("{key}.png"));
-                thumb = Some(ThumbInfo {
+                cached.strip_file = Some(format!("{key}.png"));
+                cached.thumb = Some(ThumbInfo {
                     cols: strip.cols,
                     rows: strip.rows,
                     tile_width: strip.tile_width,
                     tile_height: strip.tile_height,
                     interval_secs: strip.interval_secs,
                 });
+                let _ = write_cached(&meta_path, &cached);
+                emit_thumbnails(app, media_id, &dir, &cached);
             }
             Err(e) => eprintln!("media assets: thumbnail generation failed for {media_id}: {e}"),
         }
     }
 
-    let (peaks, bucket_secs) = match audio_peaks(path, WAVEFORM_BUCKETS) {
-        Ok(p) => (p.peaks, p.bucket_secs),
-        Err(e) => {
-            // Expected for e.g. a video with no audio stream, not just a hard failure —
-            // still cache the (empty) result so we don't re-run ffmpeg on every open.
-            eprintln!("media assets: waveform generation skipped for {media_id}: {e}");
-            (Vec::new(), 0.0)
-        }
-    };
+    if let Some(handle) = wave_handle {
+        let (peaks, bucket_secs) = handle.join().unwrap_or_else(|_| (Vec::new(), 0.0));
+        cached.peaks = peaks;
+        cached.bucket_secs = bucket_secs;
+        write_cached(&meta_path, &cached)?;
+        emit_waveform(app, media_id, &dir, &cached);
+    } else {
+        write_cached(&meta_path, &cached)?;
+    }
 
-    let cached = CachedAssets {
-        strip_file,
-        thumb,
-        peaks,
-        bucket_secs,
-    };
-    let data = serde_json::to_string(&cached).map_err(|e| e.to_string())?;
-    std::fs::write(&meta_path, data).map_err(|e| e.to_string())?;
-
-    emit_ready(app, media_id, &dir, &cached);
     Ok(())
 }
 

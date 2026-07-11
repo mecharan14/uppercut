@@ -3,6 +3,7 @@ import { useEditorStore } from "../store/editorStore";
 import { createNewProjectFlow, openExistingProjectFlow, pickAndImportMedia } from "../lib/projectFlows";
 import { splitSelectedAtPlayhead } from "../timeline/interactions";
 import type { TrackKind } from "../lib/types";
+import { RatioMenu } from "./preview/RatioMenu";
 
 const TRACK_KIND_LABELS: [TrackKind, string][] = [
   ["video", "Video track"],
@@ -126,6 +127,8 @@ export function TopBar({ onExport }: { onExport: () => void }) {
           ))}
         </div>
       </div>
+
+      <RatioMenu />
 
       <span className="spacer" />
 

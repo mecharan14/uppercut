@@ -143,6 +143,33 @@ pub fn probe_video(path: &Path) -> Result<ProbedVideo, FfmpegCliError> {
     })
 }
 
+/// True if `path` has at least one audio stream (cheap ffprobe). Used to skip waveform
+/// generation for silent videos instead of letting ffmpeg fail with a cryptic exit code.
+pub fn has_audio_stream(path: &Path) -> Result<bool, FfmpegCliError> {
+    let output = Command::new(ffprobe_path()?)
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .map_err(|e| FfmpegCliError::SpawnFailed {
+            tool: "ffprobe",
+            message: e.to_string(),
+        })?;
+
+    // ffprobe returns success with empty stdout when no matching stream exists.
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .contains("audio"))
+}
+
 fn parse_rational(s: &str) -> Result<f64, FfmpegCliError> {
     if let Some((num, den)) = s.split_once('/') {
         let num: f64 = num
@@ -237,9 +264,12 @@ pub struct ThumbnailStrip {
 }
 
 /// Generate a tiled thumbnail-strip PNG for `path`, sampling roughly one frame every 2
-/// seconds of source duration (capped to `max_tiles`, and always at least one). A single
-/// ffmpeg call (`fps=1/interval,scale=-2:h,tile=colsxrows`) produces the whole strip —
-/// not one spawn per thumbnail.
+/// seconds of source duration (capped to `max_tiles`, and always at least one).
+///
+/// Uses sparse **input seeks** (`-ss` before `-i`) rather than an `fps=` filter over the
+/// whole file — decoding every frame of a long clip is the dominant cost of the old path.
+/// Seeks land on nearby keyframes (fine for a filmstrip) and finish in roughly
+/// `O(tile_count)` keyframe decodes instead of `O(duration)`.
 pub fn generate_thumbnail_strip(
     path: &Path,
     out_path: &Path,
@@ -258,18 +288,105 @@ pub fn generate_thumbnail_strip(
 
     let (width, height) = scaled_dimensions(probed.width, probed.height, Some(tile_height));
 
-    let filter = format!("fps=1/{interval_secs:.6},scale=-2:{height},tile={cols}x{rows}");
+    let tmp = std::env::temp_dir().join(format!("uppercut-strip-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp).map_err(FfmpegCliError::Io)?;
 
-    let status = Command::new(ffmpeg_path()?)
-        .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
-        .arg(path)
-        .args(["-frames:v", "1", "-vf", &filter])
+    let ffmpeg = ffmpeg_path()?;
+    const MAX_PARALLEL: usize = 4;
+
+    // Grab frames in parallel batches. Seek-before-input lands on nearby keyframes
+    // (fine for a filmstrip) and avoids decoding the whole file.
+    for chunk_start in (0..tile_count).step_by(MAX_PARALLEL) {
+        let chunk_end = (chunk_start + MAX_PARALLEL as u32).min(tile_count);
+        let extract_result = std::thread::scope(|s| {
+            let handles: Vec<_> = (chunk_start..chunk_end)
+                .map(|i| {
+                    let frame_path = tmp.join(format!("f{i:03}.png"));
+                    let t = ((i as f64 + 0.5) * interval_secs)
+                        .min((duration - 0.05).max(0.0))
+                        .max(0.0);
+                    let ffmpeg = &ffmpeg;
+                    s.spawn(move || {
+                        let status = Command::new(ffmpeg)
+                            .args([
+                                "-hide_banner",
+                                "-loglevel",
+                                "error",
+                                "-ss",
+                                &format!("{t:.3}"),
+                                "-i",
+                            ])
+                            .arg(path)
+                            .args([
+                                "-an",
+                                "-sn",
+                                "-frames:v",
+                                "1",
+                                "-vf",
+                                &format!("scale=-2:{height}:flags=fast_bilinear"),
+                                "-threads",
+                                "1",
+                                "-y",
+                            ])
+                            .arg(&frame_path)
+                            .status()
+                            .map_err(|e| FfmpegCliError::SpawnFailed {
+                                tool: "ffmpeg",
+                                message: e.to_string(),
+                            })?;
+                        if !status.success() {
+                            return Err(FfmpegCliError::NonZeroExit(status.code().unwrap_or(-1)));
+                        }
+                        if !frame_path.is_file() {
+                            return Err(FfmpegCliError::BadOutput(format!(
+                                "seek extract produced no file at t={t:.3}"
+                            )));
+                        }
+                        Ok(())
+                    })
+                })
+                .collect();
+            for h in handles {
+                h.join().unwrap_or_else(|_| {
+                    Err(FfmpegCliError::BadOutput("frame worker panicked".into()))
+                })?;
+            }
+            Ok::<(), FfmpegCliError>(())
+        });
+        if let Err(e) = extract_result {
+            let _ = std::fs::remove_dir_all(&tmp);
+            return Err(e);
+        }
+    }
+
+    // Assemble the grid from the numbered frame sequence.
+    let status = Command::new(&ffmpeg)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-framerate",
+            "1",
+            "-i",
+        ])
+        .arg(tmp.join("f%03d.png"))
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            &format!("tile={cols}x{rows}"),
+            "-an",
+        ])
         .arg(out_path)
         .status()
         .map_err(|e| FfmpegCliError::SpawnFailed {
             tool: "ffmpeg",
             message: e.to_string(),
         })?;
+
+    let _ = std::fs::remove_dir_all(&tmp);
+
     if !status.success() {
         return Err(FfmpegCliError::NonZeroExit(status.code().unwrap_or(-1)));
     }

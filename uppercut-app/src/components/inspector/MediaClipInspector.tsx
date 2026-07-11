@@ -1,7 +1,22 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useEditorStore } from "../../store/editorStore";
-import { deleteClip, setAudioFade, setAudioGain, setClipEnabled, trimClip } from "../../lib/commands";
-import type { MediaClip, Track } from "../../lib/types";
+import {
+  deleteClip,
+  setAudioFade,
+  setAudioGain,
+  setClipEnabled,
+  setTrackAudioRole,
+  trimClip,
+} from "../../lib/commands";
+import type { MediaClip, Track, TrackAudioRole } from "../../lib/types";
+
+const AUDIO_ROLES: { value: TrackAudioRole | ""; label: string }[] = [
+  { value: "", label: "None" },
+  { value: "voiceover", label: "Voiceover" },
+  { value: "dialog", label: "Dialog" },
+  { value: "music", label: "Music" },
+  { value: "ambience", label: "Ambience" },
+];
 
 export function MediaClipInspector({ track, clip }: { track: Track; clip: MediaClip }) {
   const dispatch = useEditorStore((s) => s.dispatch);
@@ -14,27 +29,44 @@ export function MediaClipInspector({ track, clip }: { track: Track; clip: MediaC
   const [fadeIn, setFadeIn] = useState(clip.fade_in_secs);
   const [fadeOut, setFadeOut] = useState(clip.fade_out_secs);
 
+  useEffect(() => {
+    setGain(clip.gain_db);
+    setSourceIn(clip.source_in_secs);
+    setSourceOut(clip.source_out_secs);
+    setFadeIn(clip.fade_in_secs);
+    setFadeOut(clip.fade_out_secs);
+  }, [clip.id, clip.gain_db, clip.source_in_secs, clip.source_out_secs, clip.fade_in_secs, clip.fade_out_secs]);
+
   async function commitTrim() {
     await dispatch(trimClip(track.id, clip.id, sourceIn, sourceOut));
   }
 
+  const showAudio = clip.type === "audio" || track.kind === "audio" || clip.type === "video";
+
   return (
     <div className="inspector">
       <div className="inspector-section">
-        <h3>Clip</h3>
+        <h3>{clip.type === "audio" ? "Audio clip" : "Video clip"}</h3>
         <p>
           {track.name} · {track.kind}
           {media ? ` · ${media.path.split(/[/\\]/).pop()}` : ""}
         </p>
-        <div className="field">
-          <label>
-            <input
-              type="checkbox"
-              checked={clip.enabled}
-              onChange={(e) => void dispatch(setClipEnabled(track.id, clip.id, e.target.checked))}
-            />{" "}
-            Enabled
-          </label>
+        {media?.width && media?.height ? (
+          <p className="empty-hint">
+            Source {media.width}×{media.height}
+            {media.fps ? ` · ${media.fps.toFixed(2)} fps` : ""}
+            {media.duration_secs != null ? ` · ${media.duration_secs.toFixed(1)}s` : ""}
+          </p>
+        ) : null}
+        <div className="field toggle-row">
+          <input
+            id="clip-enabled"
+            type="checkbox"
+            checked={clip.enabled}
+            disabled={track.locked}
+            onChange={(e) => void dispatch(setClipEnabled(track.id, clip.id, e.target.checked))}
+          />
+          <label htmlFor="clip-enabled">Enabled</label>
         </div>
       </div>
 
@@ -45,7 +77,9 @@ export function MediaClipInspector({ track, clip }: { track: Track; clip: MediaC
           <input
             type="number"
             step="0.1"
+            min={0}
             value={sourceIn}
+            disabled={track.locked}
             onChange={(e) => setSourceIn(parseFloat(e.target.value))}
             onBlur={() => void commitTrim()}
           />
@@ -55,14 +89,16 @@ export function MediaClipInspector({ track, clip }: { track: Track; clip: MediaC
           <input
             type="number"
             step="0.1"
+            min={0}
             value={sourceOut}
+            disabled={track.locked}
             onChange={(e) => setSourceOut(parseFloat(e.target.value))}
             onBlur={() => void commitTrim()}
           />
         </div>
       </div>
 
-      {clip.type === "audio" && (
+      {showAudio && (
         <div className="inspector-section">
           <h3>Audio</h3>
           <div className="field">
@@ -73,6 +109,7 @@ export function MediaClipInspector({ track, clip }: { track: Track; clip: MediaC
               max={12}
               step={0.5}
               value={gain}
+              disabled={track.locked}
               onChange={(e) => setGain(parseFloat(e.target.value))}
               onMouseUp={() => void dispatch(setAudioGain(track.id, clip.id, gain))}
               onTouchEnd={() => void dispatch(setAudioGain(track.id, clip.id, gain))}
@@ -86,7 +123,8 @@ export function MediaClipInspector({ track, clip }: { track: Track; clip: MediaC
               step="0.1"
               min={0}
               value={fadeIn}
-              onChange={(e) => setFadeIn(parseFloat(e.target.value))}
+              disabled={track.locked}
+              onChange={(e) => setFadeIn(parseFloat(e.target.value) || 0)}
               onBlur={() => void dispatch(setAudioFade(track.id, clip.id, fadeIn, fadeOut))}
             />
           </div>
@@ -97,10 +135,30 @@ export function MediaClipInspector({ track, clip }: { track: Track; clip: MediaC
               step="0.1"
               min={0}
               value={fadeOut}
-              onChange={(e) => setFadeOut(parseFloat(e.target.value))}
+              disabled={track.locked}
+              onChange={(e) => setFadeOut(parseFloat(e.target.value) || 0)}
               onBlur={() => void dispatch(setAudioFade(track.id, clip.id, fadeIn, fadeOut))}
             />
           </div>
+          {track.kind === "audio" && (
+            <div className="field">
+              <label>Track role</label>
+              <select
+                value={track.audio_role ?? ""}
+                disabled={track.locked}
+                onChange={(e) => {
+                  const v = e.target.value as TrackAudioRole | "";
+                  void dispatch(setTrackAudioRole(track.id, v === "" ? null : v));
+                }}
+              >
+                {AUDIO_ROLES.map((r) => (
+                  <option key={r.label} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
       )}
 
@@ -108,6 +166,7 @@ export function MediaClipInspector({ track, clip }: { track: Track; clip: MediaC
         <button
           type="button"
           className="btn-danger"
+          disabled={track.locked}
           onClick={async () => {
             await dispatch(deleteClip(track.id, clip.id, false));
             select(null);

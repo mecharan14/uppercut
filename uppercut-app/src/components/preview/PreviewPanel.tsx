@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useEditorStore } from "../../store/editorStore";
 import * as ipc from "../../lib/ipc";
 import { TransportBar } from "./TransportBar";
@@ -35,17 +35,13 @@ async function syncPreviewBounds(host: HTMLElement, aspect: number) {
 export function PreviewPanel() {
   const project = useEditorStore((s) => s.project);
   const importBusy = useEditorStore((s) => s.importBusy);
+  const playing = useEditorStore((s) => s.playing);
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
 
   const hasClips = !!project?.tracks.some((t) => t.clips.length > 0);
   const aspect = project ? project.settings.width / project.settings.height : 9 / 16;
 
-  // Bounds-sync and frame-render must be sequenced, not raced: the native preview
-  // surface is only created the first time `set_preview_bounds` runs, and rendering a
-  // frame before that (e.g. two independent effects firing in parallel) silently drops
-  // the frame — see docs/architecture.md "Playback engine". `ResizeObserver` also fires
-  // once immediately on `observe()`, so this one callback covers both mount and resize,
-  // exactly mirroring the pre-React app's `syncPreviewBounds().then(refreshPreview)`.
   useEffect(() => {
     const host = hostRef.current;
     if (!host || !project) return;
@@ -61,9 +57,21 @@ export function PreviewPanel() {
     const observer = new ResizeObserver(() => void syncAndRender());
     observer.observe(host);
     return () => observer.disconnect();
-  }, [project, aspect]);
+  }, [project, aspect, fullscreen]);
 
-  let hintContent: React.ReactNode;
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setFullscreen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fullscreen]);
+
+  let hintContent: React.ReactNode = null;
   if (importBusy) {
     hintContent = (
       <>
@@ -89,7 +97,7 @@ export function PreviewPanel() {
         </span>
       </>
     );
-  } else {
+  } else if (!playing) {
     hintContent = (
       <>
         <span className="icon">▶</span>
@@ -99,15 +107,18 @@ export function PreviewPanel() {
   }
 
   return (
-    <div className="preview-column">
+    <div className={`preview-column${fullscreen ? " preview-fullscreen" : ""}`}>
       <section
         id="preview-host"
         ref={hostRef}
-        className={`preview-host${hasClips ? " has-clips" : ""}${importBusy ? " loading" : ""}`}
+        className={`preview-host${hasClips ? " has-clips" : ""}${importBusy ? " loading" : ""}${playing ? " is-playing" : ""}`}
       >
-        <div className="hint">{hintContent}</div>
+        {hintContent && <div className="hint">{hintContent}</div>}
       </section>
-      <TransportBar />
+      <TransportBar
+        fullscreen={fullscreen}
+        onToggleFullscreen={() => setFullscreen((v) => !v)}
+      />
     </div>
   );
 }

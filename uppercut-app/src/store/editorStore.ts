@@ -304,7 +304,15 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     try {
       await ipc.openProject(path);
       const project = await ipc.getProject();
-      set({ project, projectPath: path, playhead: 0, selection: null, canUndo: false, canRedo: false });
+      set({
+        project,
+        projectPath: path,
+        playhead: 0,
+        selection: null,
+        canUndo: false,
+        canRedo: false,
+        mediaAssets: {},
+      });
     } catch (e) {
       get().toast(`Load project failed: ${errMsg(e)}`, "error");
     }

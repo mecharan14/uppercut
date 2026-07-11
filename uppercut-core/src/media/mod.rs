@@ -13,9 +13,10 @@ use std::path::Path;
 use thiserror::Error;
 
 pub use ffmpeg_cli::{
-    ffmpeg_path, ffprobe_path, generate_thumbnail_strip, is_available as ffmpeg_available,
-    mix_timeline_audio, mux_video_audio, probe_video, AudioMixClip, DuckSettings, FfmpegCliError,
-    ReaderOptions, RgbaFrame, ThumbnailStrip, VideoEncoder, VideoReader,
+    ffmpeg_path, ffprobe_path, generate_thumbnail_strip, has_audio_stream,
+    is_available as ffmpeg_available, mix_timeline_audio, mux_video_audio, probe_video,
+    AudioMixClip, DuckSettings, FfmpegCliError, ReaderOptions, RgbaFrame, ThumbnailStrip,
+    VideoEncoder, VideoReader,
 };
 
 #[derive(Debug, Error)]

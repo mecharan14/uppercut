@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useEditorStore, type ThumbnailAsset } from "../../store/editorStore";
 import { fileName } from "../../lib/format";
-import { pickAndImportMedia } from "../../lib/projectFlows";
+import { pickAndImportMedia, importFromPath } from "../../lib/projectFlows";
 import { startMediaDrag } from "../../lib/dragMedia";
 
 /// Filmstrip thumbnail with hover-scrub: moving the mouse across the card selects which
@@ -56,6 +56,15 @@ export function MediaPanel() {
         onDrop={(e) => {
           e.preventDefault();
           setDragOver(false);
+          const file = e.dataTransfer.files?.[0];
+          // In Tauri, OS drops usually arrive as `tauri://drag-drop` with real paths.
+          // Browser-style drops may only expose a File name — still try when a path-like
+          // string is present (some webviews populate `path` on the File object).
+          const path =
+            (file as File & { path?: string })?.path ||
+            e.dataTransfer.getData("text/plain") ||
+            "";
+          if (path && /[/\\]/.test(path)) void importFromPath(path);
         }}
       >
         <strong>Drop video here</strong>
