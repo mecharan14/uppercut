@@ -33,9 +33,12 @@ impl PlatformPreview {
             NativeWindow::X11 { display, window } => {
                 Self::X11(Box::new(x11::Preview::new(x11::Parent { display, window })))
             }
-            NativeWindow::Wayland { display, surface } => Self::Wayland(Box::new(
-                wayland::Preview::new(wayland::Parent { display, surface }),
-            )),
+            NativeWindow::Wayland { display, surface } => {
+                Self::Wayland(Box::new(wayland::Preview::new(wayland::Parent {
+                    display,
+                    surface,
+                })))
+            }
         };
     }
 
