@@ -1,8 +1,10 @@
 import { useState } from "react";
+import { Film, Image as ImageIcon, Plus } from "lucide-react";
 import { useEditorStore, type ThumbnailAsset } from "../../store/editorStore";
 import { fileName } from "../../lib/format";
 import { pickAndImportMedia, importFromPath } from "../../lib/projectFlows";
 import { startMediaDrag } from "../../lib/dragMedia";
+import { Tooltip } from "../ui/Tooltip";
 
 /// Filmstrip thumbnail with hover-scrub: moving the mouse across the card selects which
 /// strip tile to show, CapCut-style, instead of a single static frame.
@@ -67,20 +69,19 @@ export function MediaPanel() {
           if (path && /[/\\]/.test(path)) void importFromPath(path);
         }}
       >
-        <strong>Drop video here</strong>
-        <span>or click to browse files</span>
+        <strong>Drop media here</strong>
+        <span>Video, image, or audio</span>
       </div>
 
       {items.length === 0 ? (
         <div className="empty-state">
-          <div className="empty-state-icon">🎬</div>
+          <div className="empty-state-icon">
+            <Film size={28} strokeWidth={1.5} />
+          </div>
           <p>
             <strong>No media yet</strong>
           </p>
-          <p className="empty-hint">
-            Drop a video above or click the drop zone. Each import is added to the timeline
-            automatically.
-          </p>
+          <p className="empty-hint">Drop a video above or click to browse.</p>
         </div>
       ) : (
         items.map((item) => {
@@ -99,7 +100,13 @@ export function MediaPanel() {
               ) : pendingThumb ? (
                 <div className="media-thumb skeleton" aria-label="Generating thumbnails" />
               ) : (
-                <div className={`media-thumb ${item.kind}`}>{item.kind === "image" ? "🖼" : "▶"}</div>
+                <div className={`media-thumb ${item.kind}`}>
+                  {item.kind === "image" ? (
+                    <ImageIcon size={18} strokeWidth={1.5} />
+                  ) : (
+                    <Film size={18} strokeWidth={1.5} />
+                  )}
+                </div>
               )}
               <div className="media-meta">
                 <div className="name">{fileName(item.path)}</div>
@@ -108,7 +115,11 @@ export function MediaPanel() {
                   {pendingThumb ? " · generating…" : ""}
                 </div>
               </div>
-              <span className="media-add-hint">+ timeline</span>
+              <Tooltip content="Add to timeline">
+                <span className="media-add-hint">
+                  <Plus size={14} strokeWidth={2} />
+                </span>
+              </Tooltip>
             </div>
           );
         })

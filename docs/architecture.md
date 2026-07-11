@@ -89,16 +89,25 @@ Two rendering surfaces coexist in one window:
   call `invoke`/`listen` directly — `uppercut-app/src/lib/ipc.ts` is the *only* file that
   imports `@tauri-apps/api`, so the backend surface is typed and grep-auditable in one
   place (`docs/command-api.md`'s command builders live in `lib/commands.ts` next to it).
+  The window is **frameless** (`decorations: false`) with a custom titlebar in `TopBar`
+  (drag region + in-app minimize/maximize/close via `WindowControls`). Chrome styling
+  lives in `styles/tokens.css` (charcoal surfaces, ember accent `#ff5a3d`, Source Sans 3)
+  and `styles/globals.css`; UI glyphs are **lucide-react** (no emoji icons). Timeline
+  canvas colors read the same CSS vars through `timeline/theme.ts`.
 - **Native preview surface** — a wgpu child HWND on Windows (Phase 2 v1), receiving
   composited frames from the playback engine in `uppercut-core`. Never proxies frames
-  through the webview/JS bridge.
+  through the webview/JS bridge. Preview bounds are synced from `#preview-host`'s
+  letterboxed content rect (`set_preview_bounds`) so they stay aligned when the custom
+  titlebar height changes.
 
 **Timeline architecture:** the canvas timeline is deliberately *not* a React render
 target. `uppercut-app/src/timeline/renderer.ts` is a pure `(canvas, state) => void` draw
 function (colors sourced from `timeline/theme.ts`, which reads `styles/tokens.css` custom
 properties — no hex literals in `renderer.ts`, enforced by grep gate) and
 `timeline/interactions.ts` is a mouse-event state machine (hit-test → drag → commit-on-
-mouseup) that mutates the Zustand store directly. `components/timeline/TimelineCanvas.tsx`
+mouseup) that mutates the Zustand store directly. View state includes `scrollX`/`scrollY`
+(wheel pan; Ctrl+wheel zoom anchored under cursor; middle-mouse pan) and a scrub mode on
+the ruler/empty lane (drag playhead + snap guides). `components/timeline/TimelineCanvas.tsx`
 is a thin host: one `<canvas>`, a `useEffect` that calls `renderTimeline` on relevant store
 changes, and the `useTimelineInteractions` hook. This keeps 60fps drag feedback off React's
 reconciler — the same drag-commit pattern the old vanilla-TS timeline used (optimistic

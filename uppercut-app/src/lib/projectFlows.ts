@@ -5,7 +5,7 @@ import * as ipc from "./ipc";
 import { useEditorStore } from "../store/editorStore";
 
 function isMediaPath(path: string): boolean {
-  return /\.(mp4|mov|mkv|webm|avi|mp3|wav|m4a|aac)$/i.test(path);
+  return /\.(mp4|mov|mkv|webm|avi|png|jpe?g|webp|gif|bmp|mp3|wav|m4a|aac|flac|ogg)$/i.test(path);
 }
 
 export async function importFromPath(path: string): Promise<void> {

@@ -4,6 +4,7 @@
 
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { Project } from "./types";
 
@@ -229,9 +230,29 @@ export function onDragLeave(cb: () => void): () => void {
 
 export const MEDIA_OPEN_FILTERS = [
   { name: "Video", extensions: ["mp4", "mov", "mkv", "webm", "avi"] },
+  { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] },
+  { name: "Audio", extensions: ["mp3", "wav", "m4a", "aac", "flac", "ogg"] },
   {
     name: "All media",
-    extensions: ["mp4", "mov", "mkv", "webm", "avi", "mp3", "wav", "m4a", "aac"],
+    extensions: [
+      "mp4",
+      "mov",
+      "mkv",
+      "webm",
+      "avi",
+      "png",
+      "jpg",
+      "jpeg",
+      "webp",
+      "gif",
+      "bmp",
+      "mp3",
+      "wav",
+      "m4a",
+      "aac",
+      "flac",
+      "ogg",
+    ],
   },
 ];
 
@@ -243,7 +264,7 @@ function firstPath(result: string | string[] | null): string | null {
 export async function pickMediaFile(): Promise<string | null> {
   const result = await open({
     multiple: false,
-    title: "Choose a video or audio file",
+    title: "Choose video, image, or audio",
     filters: MEDIA_OPEN_FILTERS,
   });
   return firstPath(result);
@@ -269,4 +290,33 @@ export async function pickExportSavePath(defaultPath: string): Promise<string | 
     defaultPath,
   });
   return firstPath(result);
+}
+
+// ---- Window chrome (frameless titlebar) ----
+
+export function minimizeWindow(): Promise<void> {
+  return getCurrentWindow().minimize();
+}
+
+export function toggleMaximizeWindow(): Promise<void> {
+  return getCurrentWindow().toggleMaximize();
+}
+
+export function closeWindow(): Promise<void> {
+  return getCurrentWindow().close();
+}
+
+export function isWindowMaximized(): Promise<boolean> {
+  return getCurrentWindow().isMaximized();
+}
+
+export function onWindowGeometryChange(cb: () => void): () => void {
+  const win = getCurrentWindow();
+  const unsubs: Array<() => void> = [];
+  void win.onResized(() => cb()).then((u) => unsubs.push(u));
+  void win.onMoved(() => cb()).then((u) => unsubs.push(u));
+  void win.onScaleChanged(() => cb()).then((u) => unsubs.push(u));
+  return () => {
+    for (const u of unsubs) u();
+  };
 }

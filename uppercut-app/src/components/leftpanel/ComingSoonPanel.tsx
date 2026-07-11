@@ -1,9 +1,11 @@
+import type { LucideIcon } from "lucide-react";
+
 export function ComingSoonPanel({
-  icon,
+  icon: Icon,
   title,
   pitch,
 }: {
-  icon: string;
+  icon: LucideIcon;
   title: string;
   pitch: string;
 }) {
@@ -11,15 +13,11 @@ export function ComingSoonPanel({
     <div className="panel-body coming-soon">
       <div className="coming-soon-card">
         <div className="coming-soon-icon" aria-hidden>
-          {icon}
+          <Icon size={22} strokeWidth={1.5} />
         </div>
         <h3>{title}</h3>
         <p className="coming-soon-pitch">{pitch}</p>
-        <p className="coming-soon-badge">Phase 3 — plugins &amp; asset packs</p>
-        <p className="coming-soon-note">
-          These tools stay stubbed until the WASM plugin SDK and declarative asset packs land.
-          Media, Audio, and Text are fully usable today.
-        </p>
+        <p className="coming-soon-badge">Coming in Phase 3</p>
       </div>
     </div>
   );

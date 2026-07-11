@@ -1,6 +1,7 @@
 import { ASPECT_PRESETS, type Project } from "../../lib/types";
 import { setProjectSettings } from "../../lib/commands";
 import { useEditorStore } from "../../store/editorStore";
+import { MenuSelect, type MenuSelectOption } from "../ui/MenuSelect";
 
 function originalDims(project: Project): { width: number; height: number } | null {
   const firstVideo = project.media.find(
@@ -19,30 +20,54 @@ function currentPresetId(project: Project): string {
   return "custom";
 }
 
-export function RatioMenu() {
+function shortLabel(project: Project | null, value: string): string {
+  if (!project) return "9:16";
+  if (value === "original") {
+    const orig = originalDims(project);
+    return orig ? `${orig.width}×${orig.height}` : "Original";
+  }
+  if (value === "custom") return `${project.settings.width}×${project.settings.height}`;
+  return ASPECT_PRESETS.find((p) => p.id === value)?.label ?? value;
+}
+
+export function RatioMenu({ compact = true }: { compact?: boolean }) {
   const project = useEditorStore((s) => s.project);
   const dispatch = useEditorStore((s) => s.dispatch);
   const toast = useEditorStore((s) => s.toast);
 
-  if (!project) {
-    return (
-      <select className="ratio-select" disabled title="Canvas aspect ratio">
-        <option>9:16</option>
-      </select>
-    );
+  const value = project ? currentPresetId(project) : "9:16";
+  const orig = project ? originalDims(project) : null;
+
+  const options: MenuSelectOption[] = [
+    ...ASPECT_PRESETS.map((p) => ({
+      value: p.id,
+      label: `${p.label} · ${p.width}×${p.height}`,
+    })),
+    {
+      value: "original",
+      label: orig ? `Original · ${orig.width}×${orig.height}` : "Original",
+      disabled: !orig,
+    },
+  ];
+  if (project && value === "custom") {
+    options.push({
+      value: "custom",
+      label: `Custom · ${project.settings.width}×${project.settings.height}`,
+      disabled: true,
+    });
   }
 
-  const value = currentPresetId(project);
-  const orig = originalDims(project);
-
   return (
-    <select
-      className="ratio-select"
-      title="Canvas aspect ratio"
+    <MenuSelect
+      className="ratio-menu"
+      compact={compact}
+      tooltip="Canvas aspect ratio"
+      disabled={!project}
       value={value}
-      onChange={(e) => {
-        const id = e.target.value;
-        if (id === "custom") return;
+      displayLabel={shortLabel(project, value)}
+      options={options}
+      onChange={(id) => {
+        if (!project || id === "custom") return;
         void (async () => {
           if (id === "original") {
             if (!orig) {
@@ -59,20 +84,6 @@ export function RatioMenu() {
           if (ok) toast(`Canvas ${preset.label}`, "success");
         })();
       }}
-    >
-      {ASPECT_PRESETS.map((p) => (
-        <option key={p.id} value={p.id}>
-          {p.label} ({p.width}×{p.height})
-        </option>
-      ))}
-      <option value="original" disabled={!orig}>
-        Original{orig ? ` (${orig.width}×${orig.height})` : ""}
-      </option>
-      {value === "custom" && (
-        <option value="custom">
-          Custom ({project.settings.width}×{project.settings.height})
-        </option>
-      )}
-    </select>
+    />
   );
 }

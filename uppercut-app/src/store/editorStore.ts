@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import * as ipc from "../lib/ipc";
 import { addCaption, addClip, addTrack } from "../lib/commands";
-import { timelineDuration, TRACK_LABEL_W } from "../timeline/layout";
+import { timelineDuration, TRACK_LABEL_W, maxScrollX, maxScrollY, clipLeft } from "../timeline/layout";
 import {
   clipDurationSecs,
   type Clip,
@@ -78,6 +78,10 @@ interface EditorStore {
   toolMode: ToolMode;
   snapEnabled: boolean;
   pxPerSec: number;
+  /** Horizontal scroll of the timeline canvas (px). */
+  scrollX: number;
+  /** Vertical scroll of track lanes (px). */
+  scrollY: number;
   leftTab: LeftTab;
   canUndo: boolean;
   canRedo: boolean;
@@ -107,6 +111,9 @@ interface EditorStore {
   setSnap(enabled: boolean): void;
   setZoom(px: number): void;
   fitZoom(): void;
+  setScroll(scrollX: number, scrollY?: number): void;
+  panBy(dx: number, dy: number): void;
+  ensurePlayheadVisible(): void;
   setDragGhost(ghost: DragGhost | null): void;
   dropMediaOnTimeline(): Promise<void>;
   openContextMenu(x: number, y: number, trackId: string, clipId: string, atSecs: number): void;
@@ -156,6 +163,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   toolMode: "select",
   snapEnabled: true,
   pxPerSec: 80,
+  scrollX: 0,
+  scrollY: 0,
   leftTab: "media",
   canUndo: false,
   canRedo: false,
@@ -187,7 +196,16 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set({ snapEnabled: enabled });
   },
   setZoom(px) {
-    set({ pxPerSec: Math.min(320, Math.max(25, px)) });
+    set({ pxPerSec: Math.min(400, Math.max(20, px)) });
+    // Clamp scroll after zoom so we don't leave empty space.
+    const { project, scrollX, scrollY, pxPerSec } = get();
+    if (!project) return;
+    const canvas = document.getElementById("timeline");
+    if (!canvas) return;
+    get().setScroll(
+      Math.min(scrollX, maxScrollX(project, pxPerSec, canvas.clientWidth)),
+      Math.min(scrollY, maxScrollY(project.tracks.length, canvas.clientHeight)),
+    );
   },
   fitZoom() {
     const project = get().project;
@@ -198,6 +216,35 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const duration = timelineDuration(project);
     if (duration <= 0 || availableWidth <= 0) return;
     get().setZoom(availableWidth / duration);
+    get().setScroll(0, get().scrollY);
+  },
+  setScroll(scrollX, scrollY) {
+    const project = get().project;
+    const canvas = document.getElementById("timeline");
+    const w = canvas?.clientWidth ?? 800;
+    const h = canvas?.clientHeight ?? 200;
+    const maxX = project ? maxScrollX(project, get().pxPerSec, w) : 0;
+    const maxY = project ? maxScrollY(project.tracks.length, h) : 0;
+    set({
+      scrollX: Math.max(0, Math.min(maxX, scrollX)),
+      scrollY: Math.max(0, Math.min(maxY, scrollY ?? get().scrollY)),
+    });
+  },
+  panBy(dx, dy) {
+    get().setScroll(get().scrollX + dx, get().scrollY + dy);
+  },
+  ensurePlayheadVisible() {
+    const { project, playhead, pxPerSec, scrollX } = get();
+    if (!project) return;
+    const canvas = document.getElementById("timeline");
+    if (!canvas) return;
+    const margin = 64;
+    const screenX = clipLeft(playhead, pxPerSec, scrollX);
+    if (screenX < TRACK_LABEL_W + margin) {
+      get().setScroll(scrollX - (TRACK_LABEL_W + margin - screenX));
+    } else if (screenX > canvas.clientWidth - margin) {
+      get().setScroll(scrollX + (screenX - (canvas.clientWidth - margin)));
+    }
   },
   setLeftTab(tab) {
     set({ leftTab: tab });
@@ -570,6 +617,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   onPlaybackTick(payload) {
     set({ playhead: payload.time_secs });
+    get().ensurePlayheadVisible();
   },
   onPlaybackState(payload) {
     set({ playing: payload.playing, playhead: payload.time_secs });

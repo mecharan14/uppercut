@@ -4,7 +4,7 @@
 
 import { fileName, formatTimecode } from "../lib/format";
 import { clipDurationSecs, type Project, type Selection, type Track } from "../lib/types";
-import { clipLeft, RULER_H, timelineDuration, trackLayout, TRACK_LABEL_W } from "./layout";
+import { clipLeft, RULER_H, secsFromCanvasX, timelineDuration, trackLayout, TRACK_LABEL_W } from "./layout";
 import { getTimelineTheme } from "./theme";
 import type { DragGhost, MediaAssetEntry, ThumbnailAsset, WaveformAsset } from "../store/editorStore";
 
@@ -13,6 +13,8 @@ export interface TimelineRenderState {
   playheadSecs: number;
   selection: Selection | null;
   pxPerSec: number;
+  scrollX?: number;
+  scrollY?: number;
   dragGhost?: DragGhost | null;
   snapGuideSecs?: number | null;
   mediaAssets?: Record<string, MediaAssetEntry>;
@@ -151,19 +153,20 @@ function drawDragGhost(
   pxPerSec: number,
   canvasW: number,
   canvasH: number,
+  scrollX = 0,
+  scrollY = 0,
 ) {
   const theme = getTimelineTheme();
-  const x = clipLeft(ghost.positionSecs, pxPerSec);
+  const x = clipLeft(ghost.positionSecs, pxPerSec, scrollX);
   const cw = Math.max(ghost.durationSecs * pxPerSec, 8);
   const color = ghost.valid ? theme.accent : theme.danger;
 
-  const { trackH, laneTop } = trackLayout(canvasH, Math.max(project.tracks.length, 1));
+  const { trackH, laneTop } = trackLayout(canvasH, Math.max(project.tracks.length, 1), scrollY);
   const isNewTrack = ghost.trackIndex >= project.tracks.length;
   const y = isNewTrack ? laneTop(project.tracks.length) : laneTop(ghost.trackIndex) + 18;
   const h = isNewTrack ? trackH : trackH - 22;
 
   if (isNewTrack) {
-    // New-track band: a full-width dashed line cueing "drop here to create a track".
     ctx.save();
     ctx.strokeStyle = color;
     ctx.setLineDash([6, 4]);
@@ -205,11 +208,20 @@ export function renderTimeline(canvas: HTMLCanvasElement, state: TimelineRenderS
   ctx.fillStyle = theme.timelineBg;
   ctx.fillRect(0, 0, w, h);
 
-  const { project, playheadSecs, selection, pxPerSec, dragGhost, snapGuideSecs } = state;
+  const {
+    project,
+    playheadSecs,
+    selection,
+    pxPerSec,
+    dragGhost,
+    snapGuideSecs,
+    scrollX = 0,
+    scrollY = 0,
+  } = state;
 
   if (!project || project.tracks.length === 0) {
     ctx.fillStyle = theme.text3;
-    ctx.font = "500 13px Inter, Segoe UI, sans-serif";
+    ctx.font = "500 13px var(--font-ui), Segoe UI, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText("Import media to build your timeline", w / 2, h / 2);
     ctx.textAlign = "left";
@@ -217,31 +229,44 @@ export function renderTimeline(canvas: HTMLCanvasElement, state: TimelineRenderS
   }
 
   const duration = timelineDuration(project);
-  const { trackH, laneTop } = trackLayout(h, project.tracks.length);
+  const { trackH, laneTop } = trackLayout(h, project.tracks.length, scrollY);
 
-  // Ruler
+  // Lane background (scrollable content region)
+  ctx.fillStyle = theme.timelineBg;
+  ctx.fillRect(TRACK_LABEL_W, RULER_H, w - TRACK_LABEL_W, h - RULER_H);
+
+  // Ruler (fixed height, scrolls horizontally with content)
   ctx.fillStyle = theme.rulerBg;
   ctx.fillRect(0, 0, w, RULER_H);
   ctx.strokeStyle = theme.border;
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(0, RULER_H);
-  ctx.lineTo(w, RULER_H);
+  ctx.moveTo(0, RULER_H + 0.5);
+  ctx.lineTo(w, RULER_H + 0.5);
   ctx.stroke();
 
   ctx.fillStyle = theme.rulerText;
-  ctx.font = "500 10px Inter, Segoe UI, sans-serif";
-  const step = pxPerSec >= 60 ? 1 : pxPerSec >= 30 ? 2 : 5;
-  for (let t = 0; t <= duration; t += step) {
-    const x = clipLeft(t, pxPerSec);
-    if (x < TRACK_LABEL_W) continue;
-    ctx.strokeStyle = t % 5 === 0 ? theme.rulerLineStrong : theme.rulerLineWeak;
+  ctx.font = "500 10px var(--font-ui), Segoe UI, sans-serif";
+  const step = pxPerSec >= 120 ? 0.5 : pxPerSec >= 60 ? 1 : pxPerSec >= 30 ? 2 : 5;
+  const t0 = Math.max(0, Math.floor(secsFromCanvasX(TRACK_LABEL_W, pxPerSec, scrollX) / step) * step);
+  const t1 = secsFromCanvasX(w + 40, pxPerSec, scrollX);
+  for (let t = t0; t <= Math.max(duration, t1); t += step) {
+    const x = clipLeft(t, pxPerSec, scrollX);
+    if (x < TRACK_LABEL_W - 2 || x > w + 2) continue;
+    const major = Math.abs(t % (step >= 1 ? 5 : 1)) < 1e-6 || Math.abs(t) < 1e-9;
+    ctx.strokeStyle = major ? theme.rulerLineStrong : theme.rulerLineWeak;
     ctx.beginPath();
-    ctx.moveTo(x, RULER_H);
-    ctx.lineTo(x, h);
+    ctx.moveTo(x + 0.5, RULER_H);
+    ctx.lineTo(x + 0.5, h);
     ctx.stroke();
-    if (t % 5 === 0) {
-      ctx.fillText(formatTimecode(t).slice(0, 5), x + 3, 14);
+    // Tick marks on the ruler
+    ctx.beginPath();
+    ctx.moveTo(x + 0.5, RULER_H - (major ? 10 : 5));
+    ctx.lineTo(x + 0.5, RULER_H);
+    ctx.stroke();
+    if (major) {
+      ctx.fillStyle = theme.rulerText;
+      ctx.fillText(formatTimecode(t).slice(0, 8), x + 4, 12);
     }
   }
 
@@ -251,13 +276,15 @@ export function renderTimeline(canvas: HTMLCanvasElement, state: TimelineRenderS
   // toggle buttons) instead of hit-tested canvas regions.
   project.tracks.forEach((track, i) => {
     const y = laneTop(i);
+    if (y + trackH < RULER_H || y > h) return;
 
     ctx.fillStyle = theme.trackLaneBg;
-    ctx.fillRect(0, y - 2, w, trackH + 4);
+    ctx.fillRect(TRACK_LABEL_W, y - 2, w - TRACK_LABEL_W, trackH + 4);
 
     for (const clip of track.clips) {
-      const x = clipLeft(clip.position_secs, pxPerSec);
+      const x = clipLeft(clip.position_secs, pxPerSec, scrollX);
       const cw = Math.max(clipDurationSecs(clip) * pxPerSec, 8);
+      if (x + cw < TRACK_LABEL_W || x > w) continue;
       const cy = y + 18;
       const ch = trackH - 22;
       const selected = selection?.trackId === track.id && selection?.clipId === clip.id;
@@ -296,10 +323,14 @@ export function renderTimeline(canvas: HTMLCanvasElement, state: TimelineRenderS
         ctx.lineWidth = 2;
         roundRect(ctx, x, cy, cw, ch, 5);
         ctx.stroke();
+        // Trim handle affordances
+        ctx.fillStyle = theme.clipBorderSelected;
+        ctx.fillRect(x, cy, 3, ch);
+        ctx.fillRect(x + cw - 3, cy, 3, ch);
       }
 
       ctx.fillStyle = theme.text1;
-      ctx.font = "500 10px Inter, Segoe UI, sans-serif";
+      ctx.font = "500 10px var(--font-ui), Segoe UI, sans-serif";
       const label =
         clip.type === "caption"
           ? clip.text.slice(0, 20)
@@ -316,35 +347,56 @@ export function renderTimeline(canvas: HTMLCanvasElement, state: TimelineRenderS
   });
 
   if (dragGhost) {
-    drawDragGhost(ctx, project, dragGhost, pxPerSec, w, h);
+    drawDragGhost(ctx, project, dragGhost, pxPerSec, w, h, scrollX, scrollY);
   }
 
   if (snapGuideSecs != null) {
-    const gx = clipLeft(snapGuideSecs, pxPerSec);
+    const gx = clipLeft(snapGuideSecs, pxPerSec, scrollX);
+    if (gx >= TRACK_LABEL_W && gx <= w) {
+      ctx.save();
+      ctx.strokeStyle = theme.snapGuide;
+      ctx.setLineDash([4, 3]);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(gx + 0.5, RULER_H);
+      ctx.lineTo(gx + 0.5, h);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Playhead — polished marker with ruler head + shadow line
+  const phx = clipLeft(playheadSecs, pxPerSec, scrollX);
+  if (phx >= TRACK_LABEL_W - 8 && phx <= w + 8) {
     ctx.save();
-    ctx.strokeStyle = theme.snapGuide;
-    ctx.setLineDash([4, 3]);
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = 4;
+    ctx.strokeStyle = theme.playhead;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(gx, RULER_H);
-    ctx.lineTo(gx, h);
+    ctx.moveTo(phx + 0.5, RULER_H - 2);
+    ctx.lineTo(phx + 0.5, h);
     ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Capsule head on the ruler
+    const headW = 10;
+    const headH = 14;
+    ctx.fillStyle = theme.playhead;
+    roundRect(ctx, phx - headW / 2, 4, headW, headH, 2);
+    ctx.fill();
+    // Accent notch
+    ctx.fillStyle = theme.accent;
+    ctx.fillRect(phx - 1, 6, 2, headH - 4);
     ctx.restore();
   }
 
-  const phx = clipLeft(playheadSecs, pxPerSec);
-  ctx.strokeStyle = theme.playhead;
-  ctx.lineWidth = 2;
+  // Fixed gutter over label column (so grid lines don't show under headers)
+  ctx.fillStyle = theme.trackHeaderBg;
+  ctx.fillRect(0, RULER_H, TRACK_LABEL_W, h - RULER_H);
+  ctx.strokeStyle = theme.border;
   ctx.beginPath();
-  ctx.moveTo(phx, 0);
-  ctx.lineTo(phx, h);
+  ctx.moveTo(TRACK_LABEL_W + 0.5, RULER_H);
+  ctx.lineTo(TRACK_LABEL_W + 0.5, h);
   ctx.stroke();
-
-  ctx.fillStyle = theme.playhead;
-  ctx.beginPath();
-  ctx.moveTo(phx - 5, 0);
-  ctx.lineTo(phx + 5, 0);
-  ctx.lineTo(phx, 8);
-  ctx.closePath();
-  ctx.fill();
 }

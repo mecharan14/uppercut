@@ -1,152 +1,101 @@
-import { useEffect, useRef, useState } from "react";
+import { FilePlus, FolderOpen, Save, Undo2, Redo2, Download } from "lucide-react";
 import { useEditorStore } from "../store/editorStore";
-import { createNewProjectFlow, openExistingProjectFlow, pickAndImportMedia } from "../lib/projectFlows";
-import { splitSelectedAtPlayhead } from "../timeline/interactions";
-import type { TrackKind } from "../lib/types";
-import { RatioMenu } from "./preview/RatioMenu";
+import { createNewProjectFlow, openExistingProjectFlow } from "../lib/projectFlows";
+import { IconButton } from "./ui/IconButton";
+import { WindowControls } from "./ui/WindowControls";
+import * as ipc from "../lib/ipc";
 
-const TRACK_KIND_LABELS: [TrackKind, string][] = [
-  ["video", "Video track"],
-  ["audio", "Audio track"],
-  ["caption", "Caption track"],
-];
+function BrandMark() {
+  return (
+    <svg className="brand-mark-svg" width="16" height="16" viewBox="0 0 16 16" aria-hidden>
+      <path
+        d="M3 3.5 L8 8 L3 12.5 M8 8 L13 3.5 M8 8 L13 12.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 export function TopBar({ onExport }: { onExport: () => void }) {
   const project = useEditorStore((s) => s.project);
   const canUndo = useEditorStore((s) => s.canUndo);
   const canRedo = useEditorStore((s) => s.canRedo);
-  const dispatch = useEditorStore((s) => s.dispatch);
   const undo = useEditorStore((s) => s.undo);
   const redo = useEditorStore((s) => s.redo);
   const saveProject = useEditorStore((s) => s.saveProject);
-  const toast = useEditorStore((s) => s.toast);
-
-  const [trackMenuOpen, setTrackMenuOpen] = useState(false);
-  const trackMenuRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (trackMenuRef.current && !trackMenuRef.current.contains(e.target as Node)) {
-        setTrackMenuOpen(false);
-      }
-    };
-    document.addEventListener("click", onDocClick);
-    return () => document.removeEventListener("click", onDocClick);
-  }, []);
 
   const hasProject = !!project;
 
   return (
-    <header className="topbar">
-      <div className="brand">
-        <span className="brand-mark">✂</span> Uppercut
+    <header
+      className="topbar"
+      data-tauri-drag-region
+      onDoubleClick={() => void ipc.toggleMaximizeWindow()}
+    >
+      <div className="brand" data-tauri-drag-region>
+        <BrandMark />
+        <span className="brand-name">Uppercut</span>
       </div>
 
       <div className="topbar-group">
-        <button type="button" className="btn" title="New project (Ctrl+N)" onClick={() => void createNewProjectFlow()}>
-          <span className="btn-icon">＋</span>
-          <span>New</span>
-        </button>
-        <button type="button" className="btn" title="Open project" onClick={() => void openExistingProjectFlow()}>
-          <span className="btn-icon">📂</span>
-          <span>Open</span>
-        </button>
-        <button type="button" className="btn" title="Save (Ctrl+S)" onClick={() => void saveProject()}>
-          <span className="btn-icon">💾</span>
-          <span>Save</span>
-        </button>
+        <IconButton
+          icon={FilePlus}
+          iconOnly
+          tooltip="New project (Ctrl+N)"
+          onClick={() => void createNewProjectFlow()}
+        />
+        <IconButton
+          icon={FolderOpen}
+          iconOnly
+          tooltip="Open project"
+          onClick={() => void openExistingProjectFlow()}
+        />
+        <IconButton
+          icon={Save}
+          iconOnly
+          tooltip="Save (Ctrl+S)"
+          onClick={() => void saveProject()}
+        />
       </div>
 
       <div className="topbar-group">
-        <button
-          type="button"
-          className="btn btn-import"
-          title="Import video or audio"
-          disabled={!hasProject}
-          onClick={() => void pickAndImportMedia()}
-        >
-          <span className="btn-icon">⬆</span>
-          <span>Import</span>
-        </button>
-        <button
-          type="button"
-          className="btn"
-          title="Split clip at playhead (S)"
-          disabled={!hasProject}
-          onClick={() => void splitSelectedAtPlayhead()}
-        >
-          <span className="btn-icon">✂</span>
-          <span>Split</span>
-        </button>
-      </div>
-
-      <div className="topbar-group">
-        <button
-          type="button"
-          className="btn-icon-only"
-          title="Undo (Ctrl+Z)"
+        <IconButton
+          icon={Undo2}
+          iconOnly
+          tooltip="Undo (Ctrl+Z)"
           disabled={!canUndo}
           onClick={() => void undo()}
-        >
-          ↶
-        </button>
-        <button
-          type="button"
-          className="btn-icon-only"
-          title="Redo (Ctrl+Y)"
+        />
+        <IconButton
+          icon={Redo2}
+          iconOnly
+          tooltip="Redo (Ctrl+Y)"
           disabled={!canRedo}
           onClick={() => void redo()}
-        >
-          ↷
-        </button>
+        />
       </div>
 
-      <div className="track-menu" ref={trackMenuRef}>
-        <button
-          type="button"
-          className="btn"
-          disabled={!hasProject}
-          onClick={() => setTrackMenuOpen((v) => !v)}
-        >
-          Track ▾
-        </button>
-        <div className={`track-menu-pop${trackMenuOpen ? " open" : ""}`}>
-          {TRACK_KIND_LABELS.map(([kind, label]) => (
-            <button
-              key={kind}
-              type="button"
-              onClick={() => {
-                setTrackMenuOpen(false);
-                void dispatch({ command: "AddTrack", kind, name: label.replace(" track", "") }).then(
-                  (ok) => ok && toast(`Added ${label.toLowerCase()}`, "success"),
-                );
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <span className="spacer" data-tauri-drag-region />
 
-      <RatioMenu />
-
-      <span className="spacer" />
-
-      <div className={`project-chip${hasProject ? " live" : ""}`}>
+      <div className={`project-chip${hasProject ? " live" : ""}`} data-tauri-drag-region>
         <span className="dot" />
-        <span className="label">{project ? project.name : "No project open"}</span>
+        <span className="label">{project ? project.name : "No project"}</span>
       </div>
 
-      <button
-        type="button"
-        className="btn-primary"
-        title="Export video"
+      <IconButton
+        icon={Download}
+        label="Export"
+        variant="primary"
+        tooltip="Export video"
         disabled={!hasProject}
         onClick={onExport}
-      >
-        <span className="btn-icon">⬇</span>
-        <span>Export</span>
-      </button>
+      />
+
+      <WindowControls />
     </header>
   );
 }

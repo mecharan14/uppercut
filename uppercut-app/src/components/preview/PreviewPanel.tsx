@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Film, Upload, Play } from "lucide-react";
 import { useEditorStore } from "../../store/editorStore";
 import * as ipc from "../../lib/ipc";
 import { TransportBar } from "./TransportBar";
@@ -7,10 +8,14 @@ import { TransportBar } from "./TransportBar";
 /// (not the full host rect) to the backend — the native wgpu child window is sized to
 /// exactly the letterboxed content area, so the host's dark background shows through as
 /// pillar/letterbox bars. See docs/architecture.md "Playback engine".
-async function syncPreviewBounds(host: HTMLElement, aspect: number) {
+async function syncPreviewBounds(
+  host: HTMLElement,
+  aspect: number,
+  last: { x: number; y: number; w: number; h: number } | null,
+): Promise<{ x: number; y: number; w: number; h: number } | null> {
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   const rect = host.getBoundingClientRect();
-  if (rect.width < 1 || rect.height < 1) return;
+  if (rect.width < 2 || rect.height < 2) return last;
 
   const hostAspect = rect.width / rect.height;
   let width: number;
@@ -22,14 +27,22 @@ async function syncPreviewBounds(host: HTMLElement, aspect: number) {
     width = rect.width;
     height = width / aspect;
   }
-  const x = rect.left + (rect.width - width) / 2;
-  const y = rect.top + (rect.height - height) / 2;
+  const x = Math.round(rect.left + (rect.width - width) / 2);
+  const y = Math.round(rect.top + (rect.height - height) / 2);
+  const w = Math.round(width);
+  const h = Math.round(height);
+
+  if (last && last.x === x && last.y === y && last.w === w && last.h === h) {
+    return last;
+  }
 
   try {
-    await ipc.setPreviewBounds(Math.round(x), Math.round(y), Math.round(width), Math.round(height));
+    await ipc.setPreviewBounds(x, y, w, h);
   } catch (e) {
     console.warn("preview bounds:", e);
+    return last;
   }
+  return { x, y, w, h };
 }
 
 export function PreviewPanel() {
@@ -37,6 +50,7 @@ export function PreviewPanel() {
   const importBusy = useEditorStore((s) => s.importBusy);
   const playing = useEditorStore((s) => s.playing);
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const lastBoundsRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
 
   const hasClips = !!project?.tracks.some((t) => t.clips.length > 0);
@@ -46,17 +60,46 @@ export function PreviewPanel() {
     const host = hostRef.current;
     if (!host || !project) return;
 
-    const syncAndRender = async () => {
-      await syncPreviewBounds(host, aspect);
-      if (!useEditorStore.getState().playing) {
+    let cancelled = false;
+    let debounceTimer: number | null = null;
+
+    const sync = async (opts?: { seek?: boolean }) => {
+      if (cancelled) return;
+      const next = await syncPreviewBounds(host, aspect, lastBoundsRef.current);
+      if (cancelled || !next) return;
+      const changed =
+        !lastBoundsRef.current ||
+        lastBoundsRef.current.w !== next.w ||
+        lastBoundsRef.current.h !== next.h;
+      lastBoundsRef.current = next;
+      // Only re-seek when size actually changed and we're paused — avoids flicker storms
+      // during window drag (position-only updates).
+      if (opts?.seek !== false && changed && !useEditorStore.getState().playing) {
         await ipc.seek(useEditorStore.getState().playhead).catch(() => {});
       }
     };
 
-    void syncAndRender();
-    const observer = new ResizeObserver(() => void syncAndRender());
+    const schedule = (seek = true) => {
+      if (debounceTimer != null) window.clearTimeout(debounceTimer);
+      debounceTimer = window.setTimeout(() => void sync({ seek }), 32);
+    };
+
+    void sync({ seek: true });
+    // Immediate follow-up after layout settles (fullscreen toggle, etc.)
+    const raf = requestAnimationFrame(() => void sync({ seek: true }));
+
+    const observer = new ResizeObserver(() => schedule(true));
     observer.observe(host);
-    return () => observer.disconnect();
+
+    const unlistenGeom = ipc.onWindowGeometryChange(() => schedule(false));
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      if (debounceTimer != null) window.clearTimeout(debounceTimer);
+      observer.disconnect();
+      unlistenGeom();
+    };
   }, [project, aspect, fullscreen]);
 
   useEffect(() => {
@@ -76,32 +119,34 @@ export function PreviewPanel() {
     hintContent = (
       <>
         <span className="icon spinner" />
-        <span>Importing your media…</span>
+        <span>Importing…</span>
       </>
     );
   } else if (!project) {
     hintContent = (
       <>
-        <span className="icon">🎬</span>
-        <span>Create or import to start editing</span>
+        <span className="icon">
+          <Film size={22} strokeWidth={1.5} />
+        </span>
+        <span>Import or open a project</span>
       </>
     );
   } else if (!hasClips) {
     hintContent = (
       <>
-        <span className="icon">⬆</span>
-        <span>
-          <strong>Import a video</strong>
-          <br />
-          Click the media panel or Import button
+        <span className="icon">
+          <Upload size={22} strokeWidth={1.5} />
         </span>
+        <span>Drop media in the bin to begin</span>
       </>
     );
   } else if (!playing) {
     hintContent = (
       <>
-        <span className="icon">▶</span>
-        <span>Press play to preview</span>
+        <span className="icon">
+          <Play size={22} strokeWidth={1.5} />
+        </span>
+        <span>Space to play</span>
       </>
     );
   }

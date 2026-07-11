@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 import { useEditorStore } from "../../store/editorStore";
 import {
   deleteClip,
@@ -9,6 +10,8 @@ import {
   trimClip,
 } from "../../lib/commands";
 import type { MediaClip, Track, TrackAudioRole } from "../../lib/types";
+import { MenuSelect } from "../ui/MenuSelect";
+import { Tooltip } from "../ui/Tooltip";
 
 const AUDIO_ROLES: { value: TrackAudioRole | ""; label: string }[] = [
   { value: "", label: "None" },
@@ -143,38 +146,33 @@ export function MediaClipInspector({ track, clip }: { track: Track; clip: MediaC
           {track.kind === "audio" && (
             <div className="field">
               <label>Track role</label>
-              <select
+              <MenuSelect
                 value={track.audio_role ?? ""}
                 disabled={track.locked}
-                onChange={(e) => {
-                  const v = e.target.value as TrackAudioRole | "";
-                  void dispatch(setTrackAudioRole(track.id, v === "" ? null : v));
+                options={AUDIO_ROLES.map((r) => ({ value: r.value, label: r.label }))}
+                onChange={(v) => {
+                  void dispatch(setTrackAudioRole(track.id, v === "" ? null : (v as TrackAudioRole)));
                 }}
-              >
-                {AUDIO_ROLES.map((r) => (
-                  <option key={r.label} value={r.value}>
-                    {r.label}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
           )}
         </div>
       )}
 
       <div className="inspector-actions">
-        <button
-          type="button"
-          className="btn-danger"
-          disabled={track.locked}
-          onClick={async () => {
-            await dispatch(deleteClip(track.id, clip.id, false));
-            select(null);
-          }}
-        >
-          <span className="btn-icon">🗑</span>
-          <span>Delete</span>
-        </button>
+        <Tooltip content="Delete clip">
+          <button
+            type="button"
+            className="btn-danger"
+            disabled={track.locked}
+            onClick={async () => {
+              await dispatch(deleteClip(track.id, clip.id, false));
+              select(null);
+            }}
+          >
+            <Trash2 size={14} strokeWidth={1.75} className="btn-lucide" />
+          </button>
+        </Tooltip>
       </div>
     </div>
   );

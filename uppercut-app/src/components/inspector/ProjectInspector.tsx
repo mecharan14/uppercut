@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { Settings2 } from "lucide-react";
 import { useEditorStore } from "../../store/editorStore";
 import { setProjectSettings } from "../../lib/commands";
 import { ASPECT_PRESETS } from "../../lib/types";
+import { MenuSelect } from "../ui/MenuSelect";
 
 export function ProjectInspector() {
   const project = useEditorStore((s) => s.project);
@@ -22,11 +24,13 @@ export function ProjectInspector() {
   if (!project) {
     return (
       <div className="inspector-empty">
-        <div className="icon">✦</div>
+        <div className="icon">
+          <Settings2 size={28} strokeWidth={1.5} />
+        </div>
         <p>
           <strong>No project open</strong>
           <br />
-          Import a video or open a project to edit canvas settings and clip properties.
+          Import or open a project to edit settings.
         </p>
       </div>
     );
@@ -51,36 +55,35 @@ export function ProjectInspector() {
         <p className="empty-hint">
           {project.media.length} media · {project.tracks.length} tracks
         </p>
-        <p className="empty-hint">Select a clip on the timeline for clip-specific properties.</p>
       </div>
 
       <div className="inspector-section">
         <h3>Canvas</h3>
         <div className="field">
           <label>Quick preset</label>
-          <select
+          <MenuSelect
             value={
               ASPECT_PRESETS.find(
                 (p) => p.width === project.settings.width && p.height === project.settings.height,
               )?.id ?? ""
             }
-            onChange={(e) => {
-              const preset = ASPECT_PRESETS.find((p) => p.id === e.target.value);
+            options={[
+              { value: "", label: "Custom", disabled: true },
+              ...ASPECT_PRESETS.map((p) => ({
+                value: p.id,
+                label: `${p.label} · ${p.width}×${p.height}`,
+              })),
+            ]}
+            onChange={(id) => {
+              const preset = ASPECT_PRESETS.find((p) => p.id === id);
               if (!preset) return;
               setWidth(preset.width);
               setHeight(preset.height);
-              void dispatch(
-                setProjectSettings({ width: preset.width, height: preset.height }),
-              ).then((ok) => ok && toast(`Canvas ${preset.label}`, "success"));
+              void dispatch(setProjectSettings({ width: preset.width, height: preset.height })).then(
+                (ok) => ok && toast(`Canvas ${preset.label}`, "success"),
+              );
             }}
-          >
-            <option value="">Custom</option>
-            {ASPECT_PRESETS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label} ({p.width}×{p.height})
-              </option>
-            ))}
-          </select>
+          />
         </div>
         <div className="field">
           <label>Width</label>

@@ -4,6 +4,7 @@ import { addCaption, generateCaptions } from "../../lib/commands";
 import { fileName } from "../../lib/format";
 import { CAPTION_STYLES } from "../../lib/types";
 import { CaptionStyleGallery } from "../CaptionStyleGallery";
+import { MenuSelect } from "../ui/MenuSelect";
 
 export function TextPanel() {
   const project = useEditorStore((s) => s.project);
@@ -65,14 +66,17 @@ export function TextPanel() {
         <h3>Auto captions</h3>
         <div className="field">
           <label>Source media</label>
-          <select value={autoMediaId} onChange={(e) => setAutoMediaId(e.target.value)}>
-            <option value="">Choose video or audio…</option>
-            {transcribable.map((m) => (
-              <option key={m.id} value={m.id}>
-                {fileName(m.path)}
-              </option>
-            ))}
-          </select>
+          <MenuSelect
+            value={autoMediaId}
+            options={[
+              { value: "", label: "Choose video or audio…" },
+              ...transcribable.map((m) => ({
+                value: m.id,
+                label: fileName(m.path),
+              })),
+            ]}
+            onChange={setAutoMediaId}
+          />
         </div>
         <div className="inspector-actions">
           <button

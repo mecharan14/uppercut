@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 import { useEditorStore } from "../../store/editorStore";
 import { deleteClip, setCaption } from "../../lib/commands";
 import type { CaptionClip, Track } from "../../lib/types";
 import { CaptionStyleGallery } from "../CaptionStyleGallery";
+import { Tooltip } from "../ui/Tooltip";
 
 export function CaptionInspector({ track, clip }: { track: Track; clip: CaptionClip }) {
   const dispatch = useEditorStore((s) => s.dispatch);
@@ -84,18 +86,19 @@ export function CaptionInspector({ track, clip }: { track: Track; clip: CaptionC
         >
           Update caption
         </button>
-        <button
-          type="button"
-          className="btn-danger"
-          disabled={track.locked}
-          onClick={async () => {
-            await dispatch(deleteClip(track.id, clip.id, false));
-            select(null);
-          }}
-        >
-          <span className="btn-icon">🗑</span>
-          <span>Delete</span>
-        </button>
+        <Tooltip content="Delete clip">
+          <button
+            type="button"
+            className="btn-danger"
+            disabled={track.locked}
+            onClick={async () => {
+              await dispatch(deleteClip(track.id, clip.id, false));
+              select(null);
+            }}
+          >
+            <Trash2 size={14} strokeWidth={1.75} className="btn-lucide" />
+          </button>
+        </Tooltip>
       </div>
     </div>
   );

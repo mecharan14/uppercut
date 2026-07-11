@@ -3,19 +3,32 @@
 // mutation), then issues exactly one command on mouseup — see docs/architecture.md.
 
 import { useEffect, useRef, type RefObject } from "react";
-import * as ipc from "../lib/ipc";
 import { deleteClip, moveClip, setCaption, splitClip, trimClip } from "../lib/commands";
 import type { Clip, Project } from "../lib/types";
 import { useEditorStore } from "../store/editorStore";
-import { hitTestClip, RULER_H, secsFromCanvasX, snapTime, trackIndexAtY } from "./layout";
+import {
+  hitTestClip,
+  RULER_H,
+  TRACK_LABEL_W,
+  secsFromCanvasX,
+  snapTime,
+  trackIndexAtY,
+} from "./layout";
 
 type DragState =
   | {
+      mode: "scrub";
+      lastScrubMs: number;
+    }
+  | {
+      mode: "pan";
+      startClientX: number;
+      startClientY: number;
+      origScrollX: number;
+      origScrollY: number;
+    }
+  | {
       mode: "move";
-      /// Track the clip lived on when the gesture started — this is what the eventual
-      /// `MoveClip.track_id` command param must be (the backend project hasn't moved
-      /// yet), even though the clip may have hopped across several tracks locally
-      /// during the drag (see `currentTrackId`).
       origTrackId: string;
       currentTrackId: string;
       clipId: string;
@@ -56,8 +69,6 @@ function findClip(project: Project, trackId: string, clipId: string): Clip | und
   return project.tracks.find((t) => t.id === trackId)?.clips.find((c) => c.id === clipId);
 }
 
-/// Relocates a clip from one track's clip list to another (local optimistic state only —
-/// no command dispatched here). No-op if the clip isn't found on `srcTrackId`.
 function moveClipAcrossTracks(
   project: Project,
   srcTrackId: string,
@@ -80,6 +91,25 @@ function moveClipAcrossTracks(
   };
 }
 
+function scrubTo(x: number, store: ReturnType<typeof useEditorStore.getState>, altKey: boolean) {
+  const project = store.project;
+  if (!project) return;
+  const secs = snapTime(
+    secsFromCanvasX(x, store.pxPerSec, store.scrollX),
+    project,
+    store.playhead,
+    store.pxPerSec,
+    store.snapEnabled && !altKey,
+  );
+  store.scrubAt(secs);
+  if (store.snapEnabled && !altKey) {
+    const raw = secsFromCanvasX(x, store.pxPerSec, store.scrollX);
+    store.setSnapGuide(Math.abs(secs - raw) > 1e-6 ? secs : null);
+  } else {
+    store.setSnapGuide(null);
+  }
+}
+
 export function useTimelineInteractions(canvasRef: RefObject<HTMLCanvasElement | null>) {
   const dragStateRef = useRef<DragState | null>(null);
 
@@ -88,10 +118,31 @@ export function useTimelineInteractions(canvasRef: RefObject<HTMLCanvasElement |
     if (!canvas) return;
 
     const onWheel = (ev: WheelEvent) => {
-      if (!ev.ctrlKey && !ev.metaKey) return;
-      ev.preventDefault();
       const store = useEditorStore.getState();
-      store.setZoom(store.pxPerSec + (ev.deltaY > 0 ? -10 : 10));
+      if (!store.project) return;
+      ev.preventDefault();
+
+      // Ctrl/Meta + wheel → zoom (playhead-anchored when possible).
+      if (ev.ctrlKey || ev.metaKey) {
+        const rect = canvas.getBoundingClientRect();
+        const x = ev.clientX - rect.left;
+        const beforeSecs = secsFromCanvasX(x, store.pxPerSec, store.scrollX);
+        const nextPx = store.pxPerSec + (ev.deltaY > 0 ? -12 : 12);
+        store.setZoom(nextPx);
+        const after = useEditorStore.getState();
+        // Keep the time under the cursor fixed.
+        const newScrollX = beforeSecs * after.pxPerSec - (x - TRACK_LABEL_W - 8);
+        after.setScroll(newScrollX, after.scrollY);
+        return;
+      }
+
+      // Shift + wheel or dominant deltaX → horizontal pan; else vertical.
+      const horiz = ev.shiftKey || Math.abs(ev.deltaX) > Math.abs(ev.deltaY);
+      if (horiz) {
+        store.panBy(ev.deltaX !== 0 ? ev.deltaX : ev.deltaY, 0);
+      } else {
+        store.panBy(0, ev.deltaY);
+      }
     };
 
     const onMouseDown = (ev: MouseEvent) => {
@@ -101,7 +152,33 @@ export function useTimelineInteractions(canvasRef: RefObject<HTMLCanvasElement |
       const rect = canvas.getBoundingClientRect();
       const x = ev.clientX - rect.left;
       const y = ev.clientY - rect.top;
-      const hit = hitTestClip(project, x, y, rect.height, store.pxPerSec);
+
+      // Middle mouse → pan.
+      if (ev.button === 1) {
+        ev.preventDefault();
+        dragStateRef.current = {
+          mode: "pan",
+          startClientX: ev.clientX,
+          startClientY: ev.clientY,
+          origScrollX: store.scrollX,
+          origScrollY: store.scrollY,
+        };
+        store.setDragging(true);
+        canvas.style.cursor = "grabbing";
+        return;
+      }
+
+      if (ev.button !== 0) return;
+
+      const hit = hitTestClip(
+        project,
+        x,
+        y,
+        rect.height,
+        store.pxPerSec,
+        store.scrollX,
+        store.scrollY,
+      );
 
       if (hit) {
         const hitTrack = project.tracks.find((t) => t.id === hit.trackId);
@@ -115,7 +192,7 @@ export function useTimelineInteractions(canvasRef: RefObject<HTMLCanvasElement |
 
         if (store.toolMode === "razor") {
           const at = snapTime(
-            secsFromCanvasX(x, store.pxPerSec),
+            secsFromCanvasX(x, store.pxPerSec, store.scrollX),
             project,
             store.playhead,
             store.pxPerSec,
@@ -169,32 +246,67 @@ export function useTimelineInteractions(canvasRef: RefObject<HTMLCanvasElement |
 
       if (store.toolMode === "razor") return;
 
-      if (y >= RULER_H) {
-        const secs = snapTime(
-          secsFromCanvasX(x, store.pxPerSec),
-          project,
-          store.playhead,
-          store.pxPerSec,
-          store.snapEnabled && !ev.altKey,
-        );
-        store.setPlayheadLocal(secs);
-        store.select(null);
-        // Renders the frame and plays a short audio blip in one coalesced backend
-        // request — no need to also call `seek`.
-        void ipc.scrubAudio(secs).catch(() => {});
-      }
+      // Ruler or empty lane → scrub (click + drag).
+      dragStateRef.current = { mode: "scrub", lastScrubMs: 0 };
+      store.setDragging(true);
+      store.select(null);
+      scrubTo(x, store, ev.altKey);
+      canvas.style.cursor = "ew-resize";
     };
 
     const onMouseMove = (ev: MouseEvent) => {
       const drag = dragStateRef.current;
       const store = useEditorStore.getState();
       const project = store.project;
-      if (!drag || !project) return;
+      if (!drag || !project) {
+        // Hover cursor: playhead vicinity / trim handles.
+        if (!project) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = ev.clientX - rect.left;
+        const y = ev.clientY - rect.top;
+        if (y < RULER_H) {
+          canvas.style.cursor = "ew-resize";
+          return;
+        }
+        const hit = hitTestClip(
+          project,
+          x,
+          y,
+          rect.height,
+          store.pxPerSec,
+          store.scrollX,
+          store.scrollY,
+        );
+        if (hit?.edge === "left" || hit?.edge === "right") canvas.style.cursor = "ew-resize";
+        else if (hit) canvas.style.cursor = "grab";
+        else canvas.style.cursor = "default";
+        return;
+      }
+
       const rect = canvas.getBoundingClientRect();
       const x = ev.clientX - rect.left;
       const y = ev.clientY - rect.top;
-      const delta = (x - drag.startX) / store.pxPerSec;
 
+      if (drag.mode === "pan") {
+        const dx = drag.startClientX - ev.clientX;
+        const dy = drag.startClientY - ev.clientY;
+        store.setScroll(drag.origScrollX + dx, drag.origScrollY + dy);
+        return;
+      }
+
+      if (drag.mode === "scrub") {
+        const now = performance.now();
+        // Throttle scrubAudio IPC ~60Hz; playhead updates every move.
+        scrubTo(x, store, ev.altKey);
+        // Edge auto-scroll while scrubbing.
+        const edge = 40;
+        if (x > rect.width - edge) store.panBy(8, 0);
+        else if (x < TRACK_LABEL_W + edge) store.panBy(-8, 0);
+        drag.lastScrubMs = now;
+        return;
+      }
+
+      const delta = (x - drag.startX) / store.pxPerSec;
       let nextProject: Project | null = null;
 
       if (drag.mode === "move") {
@@ -211,35 +323,99 @@ export function useTimelineInteractions(canvasRef: RefObject<HTMLCanvasElement |
         );
         store.setSnapGuide(Math.abs(pos - rawPos) > 1e-6 ? pos : null);
 
-        const destIndex = trackIndexAtY(rect.height, project.tracks.length, y);
+        const destIndex = trackIndexAtY(rect.height, project.tracks.length, y, store.scrollY);
         const destTrack = project.tracks[destIndex];
         const srcTrack = project.tracks.find((t) => t.id === drag.currentTrackId);
         const canCrossMove =
-          destTrack && srcTrack && destTrack.id !== srcTrack.id && destTrack.kind === srcTrack.kind && !destTrack.locked;
+          destTrack &&
+          srcTrack &&
+          destTrack.id !== srcTrack.id &&
+          destTrack.kind === srcTrack.kind &&
+          !destTrack.locked;
 
         if (canCrossMove) {
           nextProject = moveClipAcrossTracks(project, drag.currentTrackId, destTrack.id, clip.id, pos);
           dragStateRef.current = { ...drag, currentTrackId: destTrack.id };
         } else {
-          nextProject = withClip(project, drag.currentTrackId, clip.id, (c) => ({ ...c, position_secs: pos }));
+          nextProject = withClip(project, drag.currentTrackId, clip.id, (c) => ({
+            ...c,
+            position_secs: pos,
+          }));
         }
+
+        // Edge auto-scroll while dragging clips.
+        if (x > rect.width - 40) store.panBy(10, 0);
+        else if (x < 100) store.panBy(-10, 0);
       } else {
         const clip = findClip(project, drag.trackId, drag.clipId);
         if (!clip) return;
 
         if (drag.mode === "trim-right") {
+          const raw =
+            clip.type === "caption"
+              ? Math.max(0.1, drag.origOut + delta)
+              : Math.max(clip.source_in_secs + 0.05, drag.origOut + delta);
+          let next = raw;
+          if (store.snapEnabled && !ev.altKey) {
+            const absEnd =
+              clip.type === "caption"
+                ? clip.position_secs + raw
+                : clip.position_secs + (raw - clip.source_in_secs);
+            const snappedAbs = snapTime(
+              absEnd,
+              project,
+              store.playhead,
+              store.pxPerSec,
+              true,
+              clip.id,
+            );
+            store.setSnapGuide(Math.abs(snappedAbs - absEnd) > 1e-6 ? snappedAbs : null);
+            if (clip.type === "caption") {
+              next = Math.max(0.1, snappedAbs - clip.position_secs);
+            } else {
+              next = Math.max(
+                clip.source_in_secs + 0.05,
+                snappedAbs - clip.position_secs + clip.source_in_secs,
+              );
+            }
+          }
           nextProject = withClip(project, drag.trackId, drag.clipId, (c) =>
             c.type === "caption"
-              ? { ...c, duration_secs: Math.max(0.1, drag.origOut + delta) }
-              : { ...c, source_out_secs: Math.max(c.source_in_secs + 0.05, drag.origOut + delta) },
+              ? { ...c, duration_secs: next }
+              : { ...c, source_out_secs: next },
           );
         } else if (drag.mode === "trim-left" && clip.type !== "caption") {
-          const newIn = Math.min(drag.origOut - 0.05, drag.origIn + delta);
+          let newIn = Math.min(drag.origOut - 0.05, Math.max(0, drag.origIn + delta));
           const inDelta = newIn - drag.origIn;
+          let newPos = drag.origPos + inDelta;
+          if (store.snapEnabled && !ev.altKey) {
+            const snappedPos = snapTime(
+              newPos,
+              project,
+              store.playhead,
+              store.pxPerSec,
+              true,
+              clip.id,
+            );
+            store.setSnapGuide(Math.abs(snappedPos - newPos) > 1e-6 ? snappedPos : null);
+            const posDelta = snappedPos - drag.origPos;
+            newIn = drag.origIn + posDelta;
+            newPos = snappedPos;
+            if (newIn > drag.origOut - 0.05) {
+              newIn = drag.origOut - 0.05;
+              newPos = drag.origPos + (newIn - drag.origIn);
+            }
+            if (newIn < 0) {
+              newIn = 0;
+              newPos = drag.origPos + (newIn - drag.origIn);
+            }
+          }
+          const finalIn = newIn;
+          const finalPos = newPos;
           nextProject = withClip(project, drag.trackId, drag.clipId, (c) =>
             c.type === "caption"
               ? c
-              : { ...c, source_in_secs: newIn, position_secs: drag.origPos + inDelta },
+              : { ...c, source_in_secs: finalIn, position_secs: finalPos },
           );
         } else if (drag.mode === "trim-left-caption" && clip.type === "caption") {
           const newPos = snapTime(
@@ -249,6 +425,11 @@ export function useTimelineInteractions(canvasRef: RefObject<HTMLCanvasElement |
             store.pxPerSec,
             store.snapEnabled && !ev.altKey,
             clip.id,
+          );
+          store.setSnapGuide(
+            store.snapEnabled && !ev.altKey && Math.abs(newPos - (drag.origPos + delta)) > 1e-6
+              ? newPos
+              : null,
           );
           const posDelta = newPos - drag.origPos;
           nextProject = withClip(project, drag.trackId, drag.clipId, (c) =>
@@ -268,8 +449,17 @@ export function useTimelineInteractions(canvasRef: RefObject<HTMLCanvasElement |
       const store = useEditorStore.getState();
       store.setSnapGuide(null);
       store.setDragging(false);
+      canvas.style.cursor = "default";
       const project = store.project;
       if (!drag || !project) return;
+
+      if (drag.mode === "pan") return;
+
+      if (drag.mode === "scrub") {
+        // Pin the paused frame with a real seek (scrubAudio is for live feedback).
+        void store.seekTo(store.playhead);
+        return;
+      }
 
       if (drag.mode === "move") {
         const clip = findClip(project, drag.currentTrackId, drag.clipId);
@@ -308,13 +498,6 @@ export function useTimelineInteractions(canvasRef: RefObject<HTMLCanvasElement |
       } else if (drag.mode === "trim-left" && clip.type !== "caption") {
         const inDelta = clip.source_in_secs - drag.origIn;
         if (Math.abs(inDelta) > 1e-6) {
-          // One atomic batch, not two sequential dispatches: TrimClip alone (position
-          // unchanged) and MoveClip alone are each individually valid, so applying them
-          // as separate commands used to flicker the clip back to its pre-drag position
-          // between the two, and could leave it trimmed-but-not-repositioned forever if
-          // the second dispatch's overlap check failed after the first had already
-          // committed. A single undo step for what is, from the user's perspective, one
-          // gesture.
           void store.dispatchBatch([
             trimClip(drag.trackId, clip.id, clip.source_in_secs, null),
             moveClip(drag.trackId, clip.id, clip.position_secs),
@@ -336,9 +519,6 @@ export function useTimelineInteractions(canvasRef: RefObject<HTMLCanvasElement |
   }, [canvasRef]);
 }
 
-/// Split-at-playhead / delete used by toolbar buttons and keyboard shortcuts — not part
-/// of the mouse drag state machine, but colocated here since they share the same command
-/// vocabulary.
 export async function splitSelectedAtPlayhead(): Promise<void> {
   const store = useEditorStore.getState();
   if (!store.selection) {

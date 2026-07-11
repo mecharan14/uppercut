@@ -12,6 +12,8 @@ function currentRenderState() {
     playheadSecs: s.playhead,
     selection: s.selection,
     pxPerSec: s.pxPerSec,
+    scrollX: s.scrollX,
+    scrollY: s.scrollY,
     dragGhost: s.dragGhost,
     snapGuideSecs: s.snapGuideSecs,
     mediaAssets: s.mediaAssets,
@@ -24,6 +26,8 @@ export function TimelineCanvas() {
   const playhead = useEditorStore((s) => s.playhead);
   const selection = useEditorStore((s) => s.selection);
   const pxPerSec = useEditorStore((s) => s.pxPerSec);
+  const scrollX = useEditorStore((s) => s.scrollX);
+  const scrollY = useEditorStore((s) => s.scrollY);
   const toolMode = useEditorStore((s) => s.toolMode);
   const dragGhost = useEditorStore((s) => s.dragGhost);
   const snapGuideSecs = useEditorStore((s) => s.snapGuideSecs);
@@ -43,11 +47,23 @@ export function TimelineCanvas() {
       playheadSecs: playhead,
       selection,
       pxPerSec,
+      scrollX,
+      scrollY,
       dragGhost,
       snapGuideSecs,
       mediaAssets,
     });
-  }, [project, playhead, selection, pxPerSec, dragGhost, snapGuideSecs, mediaAssets]);
+  }, [
+    project,
+    playhead,
+    selection,
+    pxPerSec,
+    scrollX,
+    scrollY,
+    dragGhost,
+    snapGuideSecs,
+    mediaAssets,
+  ]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -71,9 +87,9 @@ export function TimelineCanvas() {
         const rect = e.currentTarget.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
-        const rawSecs = secsFromCanvasX(x, pxPerSec);
+        const rawSecs = secsFromCanvasX(x, pxPerSec, scrollX);
         const positionSecs = snapTime(rawSecs, project, playhead, pxPerSec, snapEnabled);
-        const trackIndex = trackIndexAtY(rect.height, project.tracks.length, y);
+        const trackIndex = trackIndexAtY(rect.height, project.tracks.length, y, scrollY);
         const targetTrack = project.tracks[trackIndex];
         const wantsKind = payload.kind === "audio" ? "audio" : "video";
         const valid = !targetTrack || targetTrack.kind === wantsKind;
@@ -100,9 +116,15 @@ export function TimelineCanvas() {
         const rect = e.currentTarget.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
-        const hit = hitTestClip(project, x, y, rect.height, pxPerSec);
+        const hit = hitTestClip(project, x, y, rect.height, pxPerSec, scrollX, scrollY);
         if (!hit) return;
-        const atSecs = snapTime(secsFromCanvasX(x, pxPerSec), project, playhead, pxPerSec, snapEnabled);
+        const atSecs = snapTime(
+          secsFromCanvasX(x, pxPerSec, scrollX),
+          project,
+          playhead,
+          pxPerSec,
+          snapEnabled,
+        );
         openContextMenu(e.clientX, e.clientY, hit.trackId, hit.clip.id, atSecs);
       }}
     />

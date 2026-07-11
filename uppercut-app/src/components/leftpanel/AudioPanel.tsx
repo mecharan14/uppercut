@@ -1,9 +1,12 @@
 import { useState } from "react";
+import { Music, Plus } from "lucide-react";
 import { useEditorStore } from "../../store/editorStore";
 import { fileName } from "../../lib/format";
 import { generateVoiceover } from "../../lib/commands";
 import { pickAndImportMedia } from "../../lib/projectFlows";
 import { startMediaDrag } from "../../lib/dragMedia";
+import { MenuSelect } from "../ui/MenuSelect";
+import { Tooltip } from "../ui/Tooltip";
 
 export function AudioPanel() {
   const project = useEditorStore((s) => s.project);
@@ -57,10 +60,14 @@ export function AudioPanel() {
         </div>
         <div className="field">
           <label>Voice provider</label>
-          <select value={provider} onChange={(e) => setProvider(e.target.value as typeof provider)}>
-            <option value="piper_local">Piper (local)</option>
-            <option value="open_ai">OpenAI (BYO key)</option>
-          </select>
+          <MenuSelect
+            value={provider}
+            options={[
+              { value: "piper_local", label: "Piper (local)" },
+              { value: "open_ai", label: "OpenAI (BYO key)" },
+            ]}
+            onChange={(v) => setProvider(v as typeof provider)}
+          />
         </div>
         <div className="inspector-actions">
           <button
@@ -81,14 +88,13 @@ export function AudioPanel() {
         </button>
       {items.length === 0 ? (
         <div className="empty-state">
-          <div className="empty-state-icon">♪</div>
+          <div className="empty-state-icon">
+            <Music size={28} strokeWidth={1.5} />
+          </div>
           <p>
             <strong>No audio yet</strong>
           </p>
-          <p className="empty-hint">
-            Import music or SFX, or generate a voiceover above. Items appear here and can be
-            dragged onto an audio track.
-          </p>
+          <p className="empty-hint">Import audio or generate a voiceover above.</p>
         </div>
       ) : (
           items.map((item) => (
@@ -99,12 +105,18 @@ export function AudioPanel() {
               onDragStart={(e) => startMediaDrag(e, item.id, item.kind, item.duration_secs ?? 5)}
               onClick={() => void placeMediaOnTimeline(item.id, item.kind)}
             >
-              <div className="media-thumb audio">♪</div>
+              <div className="media-thumb audio">
+                <Music size={18} strokeWidth={1.5} />
+              </div>
               <div className="media-meta">
                 <div className="name">{fileName(item.path)}</div>
                 <div className="sub">{item.duration_secs?.toFixed(1) ?? "?"}s</div>
               </div>
-              <span className="media-add-hint">+ timeline</span>
+              <Tooltip content="Add to timeline">
+                <span className="media-add-hint">
+                  <Plus size={14} strokeWidth={2} />
+                </span>
+              </Tooltip>
             </div>
           ))
         )}

@@ -21,7 +21,9 @@ export function App() {
 
   useEffect(() => {
     const unsubDrop = ipc.onDragDrop((paths) => {
-      const path = paths.find((p) => /\.(mp4|mov|mkv|webm|avi|mp3|wav|m4a|aac)$/i.test(p));
+      const path = paths.find((p) =>
+        /\.(mp4|mov|mkv|webm|avi|png|jpe?g|webp|gif|bmp|mp3|wav|m4a|aac|flac|ogg)$/i.test(p),
+      );
       if (path) void importFromPath(path);
     });
     const unsubEnter = ipc.onDragEnter(() => {

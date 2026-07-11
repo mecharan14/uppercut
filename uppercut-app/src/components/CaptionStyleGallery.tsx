@@ -19,7 +19,6 @@ export function CaptionStyleGallery({
             aria-selected={value === id}
             className={`style-card style-${id}${value === id ? " selected" : ""}`}
             onClick={() => onChange(id)}
-            title={meta.label}
           >
             <span className="style-preview">{meta.preview}</span>
             <span className="style-label">{meta.label}</span>

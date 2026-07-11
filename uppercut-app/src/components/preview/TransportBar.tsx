@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
+import { Play, Pause, ChevronLeft, ChevronRight, Maximize2, Minimize2 } from "lucide-react";
 import { useEditorStore } from "../../store/editorStore";
 import { formatTimecode, parseTimecode } from "../../lib/format";
 import { timelineDuration } from "../../timeline/layout";
+import { IconButton } from "../ui/IconButton";
+import { Tooltip } from "../ui/Tooltip";
+import { RatioMenu } from "./RatioMenu";
 
 export function TransportBar({
   fullscreen,
@@ -38,69 +42,69 @@ export function TransportBar({
 
   return (
     <div className="transport-bar">
-      <button
-        type="button"
-        className="btn-icon-only transport-step"
-        title="Previous frame (←)"
+      <IconButton
+        icon={ChevronLeft}
+        iconOnly
+        className="transport-step"
+        tooltip="Previous frame (←)"
         disabled={!project}
         onClick={() => void seekTo(Math.max(0, playhead - frameStep))}
-      >
-        ‹
-      </button>
-      <button
-        type="button"
-        className={`play-btn${playing ? " playing" : ""}`}
-        title="Play / Pause (Space)"
-        disabled={!project}
-        onClick={() => (playing ? stopPlayback() : void startPlayback())}
-      >
-        {playing ? "⏸" : "▶"}
-      </button>
-      <button
-        type="button"
-        className="btn-icon-only transport-step"
-        title="Next frame (→)"
+      />
+      <Tooltip content="Play / Pause (Space)">
+        <button
+          type="button"
+          className={`play-btn${playing ? " playing" : ""}`}
+          disabled={!project}
+          onClick={() => (playing ? stopPlayback() : void startPlayback())}
+        >
+          {playing ? <Pause size={18} strokeWidth={1.75} /> : <Play size={18} strokeWidth={1.75} />}
+        </button>
+      </Tooltip>
+      <IconButton
+        icon={ChevronRight}
+        iconOnly
+        className="transport-step"
+        tooltip="Next frame (→)"
         disabled={!project}
         onClick={() => void seekTo(playhead + frameStep)}
-      >
-        ›
-      </button>
-      <input
-        type="text"
-        className="timecode"
-        title="Edit timecode (Enter to seek)"
-        value={editing ? draft : formatTimecode(playhead)}
-        disabled={!project}
-        onFocus={() => {
-          setEditing(true);
-          setDraft(formatTimecode(playhead));
-        }}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commitTimecode}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            commitTimecode();
-            (e.target as HTMLInputElement).blur();
-          }
-          if (e.key === "Escape") {
-            setDraft(formatTimecode(playhead));
-            setEditing(false);
-            (e.target as HTMLInputElement).blur();
-          }
-        }}
       />
+      <Tooltip content="Edit timecode (Enter to seek)">
+        <input
+          type="text"
+          className="timecode"
+          value={editing ? draft : formatTimecode(playhead)}
+          disabled={!project}
+          onFocus={() => {
+            setEditing(true);
+            setDraft(formatTimecode(playhead));
+          }}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commitTimecode}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commitTimecode();
+              (e.target as HTMLInputElement).blur();
+            }
+            if (e.key === "Escape") {
+              setDraft(formatTimecode(playhead));
+              setEditing(false);
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+        />
+      </Tooltip>
       <span className="timecode-sub">/ {duration}</span>
       <span className="spacer" />
-      <button
-        type="button"
-        className={`btn btn-ghost btn-sm${fullscreen ? " active" : ""}`}
-        title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen preview"}
+      <RatioMenu compact />
+      <IconButton
+        icon={fullscreen ? Minimize2 : Maximize2}
+        iconOnly
+        tooltip={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen preview"}
         disabled={!project}
+        className={fullscreen ? "active" : ""}
         onClick={onToggleFullscreen}
-      >
-        {fullscreen ? "Exit" : "⛶"}
-      </button>
+      />
     </div>
   );
 }

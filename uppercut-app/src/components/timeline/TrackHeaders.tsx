@@ -1,8 +1,17 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { Film, Music, Type, VolumeX, Lock, EyeOff, MoreHorizontal } from "lucide-react";
 import { useEditorStore } from "../../store/editorStore";
 import { deleteTrack, renameTrack, setTrackFlags } from "../../lib/commands";
 import { trackLayout, TRACK_LABEL_W } from "../../timeline/layout";
 import type { Track } from "../../lib/types";
+import { Tooltip } from "../ui/Tooltip";
+
+function TrackKindIcon({ kind }: { kind: Track["kind"] }) {
+  const props = { size: 12, strokeWidth: 1.75 } as const;
+  if (kind === "video") return <Film {...props} />;
+  if (kind === "audio") return <Music {...props} />;
+  return <Type {...props} />;
+}
 
 /// DOM column of track headers overlaid on the TRACK_LABEL_W gutter the canvas reserves
 /// but no longer draws into (see renderer.ts) — real interactive controls (dbl-click
@@ -42,9 +51,10 @@ export function TrackHeaders({ containerRef }: { containerRef: RefObject<HTMLEle
     return () => document.removeEventListener("click", onDocClick);
   }, []);
 
+  const scrollY = useEditorStore((s) => s.scrollY);
   if (!project || project.tracks.length === 0 || height === 0) return null;
 
-  const { trackH, laneTop } = trackLayout(height, project.tracks.length);
+  const { trackH, laneTop } = trackLayout(height, project.tracks.length, scrollY);
 
   function startRename(track: Track) {
     explicitRenameActionRef.current = false;
@@ -76,7 +86,7 @@ export function TrackHeaders({ containerRef }: { containerRef: RefObject<HTMLEle
       {project.tracks.map((track, i) => (
         <div key={track.id} className="track-header-row" style={{ top: laneTop(i), height: trackH }}>
           <span className="track-header-icon">
-            {track.kind === "video" ? "▶" : track.kind === "audio" ? "♪" : "T"}
+            <TrackKindIcon kind={track.kind} />
           </span>
           {renaming === track.id ? (
             <input
@@ -91,48 +101,53 @@ export function TrackHeaders({ containerRef }: { containerRef: RefObject<HTMLEle
               }}
             />
           ) : (
-            <span
-              className={`track-header-name${track.hidden || track.muted ? " dimmed" : ""}`}
-              title="Double-click to rename"
-              onDoubleClick={() => startRename(track)}
-            >
-              {track.name}
-            </span>
+            <Tooltip content="Double-click to rename">
+              <span
+                className={`track-header-name${track.hidden || track.muted ? " dimmed" : ""}`}
+                onDoubleClick={() => startRename(track)}
+              >
+                {track.name}
+              </span>
+            </Tooltip>
           )}
           <div className="track-header-actions">
-            <button
-              type="button"
-              className={`track-flag-btn${track.muted ? " active" : ""}`}
-              title={track.muted ? "Unmute" : "Mute"}
-              onClick={() => void dispatch(setTrackFlags(track.id, { muted: !track.muted }))}
-            >
-              M
-            </button>
-            <button
-              type="button"
-              className={`track-flag-btn${track.locked ? " active" : ""}`}
-              title={track.locked ? "Unlock" : "Lock"}
-              onClick={() => void dispatch(setTrackFlags(track.id, { locked: !track.locked }))}
-            >
-              L
-            </button>
-            <button
-              type="button"
-              className={`track-flag-btn${track.hidden ? " active" : ""}`}
-              title={track.hidden ? "Show" : "Hide"}
-              onClick={() => void dispatch(setTrackFlags(track.id, { hidden: !track.hidden }))}
-            >
-              H
-            </button>
-            <div className="track-header-menu">
+            <Tooltip content={track.muted ? "Unmute" : "Mute"}>
               <button
                 type="button"
-                className="track-flag-btn"
-                title="More"
-                onClick={() => setMenuOpen(menuOpen === track.id ? null : track.id)}
+                className={`track-flag-btn${track.muted ? " active" : ""}`}
+                onClick={() => void dispatch(setTrackFlags(track.id, { muted: !track.muted }))}
               >
-                ⋯
+                <VolumeX size={12} strokeWidth={1.75} />
               </button>
+            </Tooltip>
+            <Tooltip content={track.locked ? "Unlock" : "Lock"}>
+              <button
+                type="button"
+                className={`track-flag-btn${track.locked ? " active" : ""}`}
+                onClick={() => void dispatch(setTrackFlags(track.id, { locked: !track.locked }))}
+              >
+                <Lock size={12} strokeWidth={1.75} />
+              </button>
+            </Tooltip>
+            <Tooltip content={track.hidden ? "Show" : "Hide"}>
+              <button
+                type="button"
+                className={`track-flag-btn${track.hidden ? " active" : ""}`}
+                onClick={() => void dispatch(setTrackFlags(track.id, { hidden: !track.hidden }))}
+              >
+                <EyeOff size={12} strokeWidth={1.75} />
+              </button>
+            </Tooltip>
+            <div className="track-header-menu">
+              <Tooltip content="More" disabled={menuOpen === track.id}>
+                <button
+                  type="button"
+                  className="track-flag-btn"
+                  onClick={() => setMenuOpen(menuOpen === track.id ? null : track.id)}
+                >
+                  <MoreHorizontal size={12} strokeWidth={1.75} />
+                </button>
+              </Tooltip>
               {menuOpen === track.id && (
                 <div className="track-header-menu-pop">
                   <button
