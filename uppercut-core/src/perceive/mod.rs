@@ -140,9 +140,10 @@ pub fn transcribe_media(project: &Project, media_id: Uuid) -> Result<Transcript,
 /// drops every segment via `filter_map`, so `offsets` (ms) is the field to use.
 fn parse_whisper_json(data: &str) -> Result<Vec<TranscriptSegment>, String> {
     let parsed: WhisperJson = serde_json::from_str(data).map_err(|e| e.to_string())?;
-    Ok(parsed
-        .transcription
-        .unwrap_or_default()
+    let raw_segments = parsed.transcription.unwrap_or_default();
+    let raw_count = raw_segments.len();
+
+    let segments: Vec<TranscriptSegment> = raw_segments
         .into_iter()
         .filter_map(|s| {
             let offsets = s.offsets?;
@@ -152,7 +153,22 @@ fn parse_whisper_json(data: &str) -> Result<Vec<TranscriptSegment>, String> {
                 text: s.text.trim().to_string(),
             })
         })
-        .collect())
+        .collect();
+
+    // whisper.cpp produced raw entries but every single one failed to parse into a
+    // segment (each was missing `offsets`) — almost certainly a field rename/schema drift
+    // in a future whisper.cpp version (this has already happened once for this exact
+    // codebase — see the `timestamps`-vs-`offsets` note above), not a legitimately empty
+    // transcript. Fail loudly instead of silently returning an empty transcript that's
+    // indistinguishable from "no speech detected."
+    if raw_count > 0 && segments.is_empty() {
+        return Err(format!(
+            "whisper produced {raw_count} segment(s) but none had a parseable `offsets` \
+             field — whisper.cpp's JSON schema may have changed"
+        ));
+    }
+
+    Ok(segments)
 }
 
 fn find_whisper_cli() -> Option<PathBuf> {
@@ -225,5 +241,30 @@ mod tests {
         assert_eq!(segments[0].text, "he just does NOT miss");
         assert!((segments[1].start_secs - 2.5).abs() < 1e-9);
         assert!((segments[1].end_secs - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parse_whisper_json_errors_when_all_segments_lack_offsets() {
+        // Simulates a hypothetical future whisper.cpp schema change that renames/removes
+        // `offsets` — every entry fails to parse into a segment. This must surface as an
+        // error, not silently return an empty (and indistinguishable from "no speech")
+        // transcript.
+        let data = r#"{
+            "transcription": [
+                { "timestamps": { "from": "00:00:00,000", "to": "00:00:02,500" }, "text": "hi" }
+            ]
+        }"#;
+        let err = parse_whisper_json(data).unwrap_err();
+        assert!(err.contains("offsets"));
+    }
+
+    #[test]
+    fn parse_whisper_json_empty_transcription_is_not_an_error() {
+        // A genuinely silent clip: whisper.cpp returns an empty `transcription` array,
+        // not entries that failed to parse — this is legitimately empty, not schema
+        // drift, and must not be treated as a failure.
+        let data = r#"{ "transcription": [] }"#;
+        let segments = parse_whisper_json(data).unwrap();
+        assert!(segments.is_empty());
     }
 }

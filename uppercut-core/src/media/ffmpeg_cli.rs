@@ -470,8 +470,17 @@ pub fn mix_timeline_audio(
 
             let voice_clips: Vec<AudioMixClip> = voice.into_iter().cloned().collect();
             let music_clips: Vec<AudioMixClip> = music.into_iter().cloned().collect();
-            mix_clip_bus(&voice_clips, sample_rate, duration_secs, &voice_wav)?;
-            mix_clip_bus(&music_clips, sample_rate, duration_secs, &music_wav)?;
+            // `?` alone would leak `temp_dir` on failure (it's already been created above,
+            // unlike the later ffmpeg-status and `mix_clip_bus` calls further down, which
+            // already clean up on their own error paths).
+            if let Err(e) = mix_clip_bus(&voice_clips, sample_rate, duration_secs, &voice_wav) {
+                std::fs::remove_dir_all(&temp_dir).ok();
+                return Err(e);
+            }
+            if let Err(e) = mix_clip_bus(&music_clips, sample_rate, duration_secs, &music_wav) {
+                std::fs::remove_dir_all(&temp_dir).ok();
+                return Err(e);
+            }
 
             // `sidechaincompress` alone already produces the gain reduction ("ducking")
             // when the voice/dialog sidechain is active; no extra gain stage is applied
@@ -558,6 +567,13 @@ fn mix_clip_bus(
     for (i, clip) in clips.iter().enumerate() {
         let seg = temp_dir.join(format!("seg_{i}.wav"));
         let seg_duration = clip.source_out_secs - clip.source_in_secs;
+        if seg_duration <= 0.0 {
+            std::fs::remove_dir_all(&temp_dir).ok();
+            return Err(FfmpegCliError::BadOutput(format!(
+                "invalid audio clip range: source_out_secs ({}) <= source_in_secs ({})",
+                clip.source_out_secs, clip.source_in_secs
+            )));
+        }
         let af = build_audio_filter(clip, seg_duration);
 
         let status = Command::new(ffmpeg_path()?)
@@ -593,7 +609,10 @@ fn mix_clip_bus(
         }
         segment_paths.push(seg);
 
-        let delay_ms = (clip.position_secs * 1000.0).round() as u64;
+        // `as u64` on a negative float saturates to 0 rather than panicking — relying on
+        // that implicitly would silently turn a negative position into "starts at 0"
+        // instead of a clearly-intentional clamp. `.max(0.0)` makes the clamp explicit.
+        let delay_ms = (clip.position_secs.max(0.0) * 1000.0).round() as u64;
         filter_parts.push(format!("[{i}:a]adelay={delay_ms}|{delay_ms}[a{i}]"));
     }
 

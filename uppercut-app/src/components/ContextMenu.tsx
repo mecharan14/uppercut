@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useEditorStore } from "../store/editorStore";
 import { setClipEnabled, splitClip } from "../lib/commands";
 
@@ -12,6 +12,7 @@ export function ContextMenu() {
   const duplicateSelection = useEditorStore((s) => s.duplicateSelection);
   const clipboard = useEditorStore((s) => s.clipboard);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
   useEffect(() => {
     if (!menu) return;
@@ -29,6 +30,22 @@ export function ContextMenu() {
     };
   }, [menu, closeContextMenu]);
 
+  // Menu opens at the raw click point; once its real size is known (after this layout
+  // pass, before paint — no visible flash), clamp it back on-screen. Without this, a
+  // right-click near the window's right/bottom edge rendered the menu partially or fully
+  // off-screen with its bottom items ("Delete"/"Ripple delete") unreachable.
+  useLayoutEffect(() => {
+    if (!menu || !rootRef.current) {
+      setPos(null);
+      return;
+    }
+    const rect = rootRef.current.getBoundingClientRect();
+    const margin = 4;
+    const left = Math.max(margin, Math.min(menu.x, window.innerWidth - rect.width - margin));
+    const top = Math.max(margin, Math.min(menu.y, window.innerHeight - rect.height - margin));
+    setPos({ left, top });
+  }, [menu]);
+
   if (!menu) return null;
 
   const track = project?.tracks.find((t) => t.id === menu.trackId);
@@ -45,7 +62,7 @@ export function ContextMenu() {
     <div
       className="context-menu"
       ref={rootRef}
-      style={{ left: menu.x, top: menu.y }}
+      style={{ left: pos?.left ?? menu.x, top: pos?.top ?? menu.y }}
     >
       <button
         type="button"

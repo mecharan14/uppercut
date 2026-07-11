@@ -39,7 +39,20 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const target = e.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+      // A `<dialog>` opened via `showModal()` (ExportDialog) traps focus and handles
+      // Escape natively, but keydown events still bubble to `window` — without this guard,
+      // e.g. Space on a focused dialog button both toggles playback (this handler) and
+      // activates the button (native behavior), and "s"/"c" while a style <select> inside
+      // it is focused would switch the timeline tool underneath the open dialog.
+      if (target instanceof Element && target.closest("dialog[open]")) return;
       const store = useEditorStore.getState();
       const mod = e.ctrlKey || e.metaKey;
 

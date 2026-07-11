@@ -63,6 +63,14 @@ interface EditorStore {
   dragGhost: DragGhost | null;
   contextMenu: { x: number; y: number; trackId: string; clipId: string; atSecs: number } | null;
   snapGuideSecs: number | null;
+  /// True while a timeline mouse drag (move/trim) is in progress — set by
+  /// `timeline/interactions.ts`. Lets `project:changed`'s handler skip refetching mid-drag
+  /// so a concurrent backend event (e.g. a slow GenerateVoiceover/GenerateCaptions/Export
+  /// started before the drag began landing) doesn't overwrite the drag's local optimistic
+  /// mutation and yank the clip back to its pre-drag position mid-gesture. The eventual
+  /// mouseup commit's own `dispatch`/`dispatchBatch` call refetches afterward regardless,
+  /// so this only defers the refresh, never skips it.
+  isDragging: boolean;
 
   toast(message: string, kind?: ToastKind): void;
   dismissToast(id: number): void;
@@ -78,6 +86,7 @@ interface EditorStore {
   setSnapGuide(secs: number | null): void;
   setLeftTab(tab: LeftTab): void;
   setPlayheadLocal(secs: number): void;
+  setDragging(dragging: boolean): void;
 
   refetchProject(): Promise<void>;
   loadProjectFromPath(path: string): Promise<void>;
@@ -125,6 +134,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   dragGhost: null,
   contextMenu: null,
   snapGuideSecs: null,
+  isDragging: false,
 
   toast(message, kind = "info") {
     const id = nextToastId++;
@@ -162,6 +172,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
   setPlayheadLocal(secs) {
     set({ playhead: Math.max(0, secs) });
+  },
+  setDragging(dragging) {
+    set({ isDragging: dragging });
   },
   setDragGhost(ghost) {
     set({ dragGhost: ghost });
@@ -485,6 +498,9 @@ export function connectStoreToBackendEvents(): () => void {
   const unsubState = ipc.onPlaybackState((p) => useEditorStore.getState().onPlaybackState(p));
   const unsubChanged = ipc.onProjectChanged((p) => {
     useEditorStore.setState({ canUndo: p.can_undo, canRedo: p.can_redo });
+    // Skip the refetch while a timeline drag is in progress — see `isDragging`'s doc
+    // comment. The undo/redo flags above are harmless to update regardless.
+    if (useEditorStore.getState().isDragging) return;
     void useEditorStore.getState().refetchProject();
   });
   return () => {

@@ -163,6 +163,7 @@ export function useTimelineInteractions(canvasRef: RefObject<HTMLCanvasElement |
             origPos: hit.clip.position_secs,
           };
         }
+        if (dragStateRef.current) store.setDragging(true);
         return;
       }
 
@@ -266,6 +267,7 @@ export function useTimelineInteractions(canvasRef: RefObject<HTMLCanvasElement |
       dragStateRef.current = null;
       const store = useEditorStore.getState();
       store.setSnapGuide(null);
+      store.setDragging(false);
       const project = store.project;
       if (!drag || !project) return;
 
