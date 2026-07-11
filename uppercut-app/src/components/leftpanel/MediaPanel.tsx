@@ -1,11 +1,43 @@
 import { useState } from "react";
-import { useEditorStore } from "../../store/editorStore";
+import { useEditorStore, type ThumbnailAsset } from "../../store/editorStore";
 import { fileName } from "../../lib/format";
 import { pickAndImportMedia } from "../../lib/projectFlows";
 import { startMediaDrag } from "../../lib/dragMedia";
 
+/// Filmstrip thumbnail with hover-scrub: moving the mouse across the card selects which
+/// strip tile to show, CapCut-style, instead of a single static frame.
+function FilmstripThumb({ thumb, durationSecs }: { thumb: ThumbnailAsset; durationSecs: number }) {
+  const [hoverFrac, setHoverFrac] = useState<number | null>(null);
+  const tileCount = thumb.cols * thumb.rows;
+  const frac = hoverFrac ?? 0;
+  const sourceTime = frac * Math.max(durationSecs, 0);
+  const tileIndex = Math.max(
+    0,
+    Math.min(tileCount - 1, thumb.intervalSecs > 0 ? Math.round(sourceTime / thumb.intervalSecs) : 0),
+  );
+  const col = tileIndex % thumb.cols;
+  const row = Math.floor(tileIndex / thumb.cols);
+
+  return (
+    <div
+      className="media-thumb video filmstrip"
+      onMouseMove={(e) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        setHoverFrac(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)));
+      }}
+      onMouseLeave={() => setHoverFrac(null)}
+      style={{
+        backgroundImage: `url(${thumb.stripUrl})`,
+        backgroundPosition: `-${col * thumb.tileWidth}px -${row * thumb.tileHeight}px`,
+        backgroundSize: `${thumb.cols * thumb.tileWidth}px ${thumb.rows * thumb.tileHeight}px`,
+      }}
+    />
+  );
+}
+
 export function MediaPanel() {
   const project = useEditorStore((s) => s.project);
+  const mediaAssets = useEditorStore((s) => s.mediaAssets);
   const placeMediaOnTimeline = useEditorStore((s) => s.placeMediaOnTimeline);
   const [dragOver, setDragOver] = useState(false);
 
@@ -35,24 +67,31 @@ export function MediaPanel() {
           Imported files appear here. Each one is added to the timeline automatically.
         </p>
       ) : (
-        items.map((item) => (
-          <div
-            key={item.id}
-            className="media-item"
-            draggable
-            onDragStart={(e) => startMediaDrag(e, item.id, item.kind, item.duration_secs ?? 5)}
-            onClick={() => void placeMediaOnTimeline(item.id, item.kind)}
-          >
-            <div className={`media-thumb ${item.kind}`}>{item.kind === "image" ? "🖼" : "▶"}</div>
-            <div className="media-meta">
-              <div className="name">{fileName(item.path)}</div>
-              <div className="sub">
-                {item.kind} · {item.duration_secs?.toFixed(1) ?? "?"}s
+        items.map((item) => {
+          const thumb = mediaAssets[item.id]?.thumbnails;
+          return (
+            <div
+              key={item.id}
+              className="media-item"
+              draggable
+              onDragStart={(e) => startMediaDrag(e, item.id, item.kind, item.duration_secs ?? 5)}
+              onClick={() => void placeMediaOnTimeline(item.id, item.kind)}
+            >
+              {thumb && thumb.image ? (
+                <FilmstripThumb thumb={thumb} durationSecs={item.duration_secs ?? 0} />
+              ) : (
+                <div className={`media-thumb ${item.kind}`}>{item.kind === "image" ? "🖼" : "▶"}</div>
+              )}
+              <div className="media-meta">
+                <div className="name">{fileName(item.path)}</div>
+                <div className="sub">
+                  {item.kind} · {item.duration_secs?.toFixed(1) ?? "?"}s
+                </div>
               </div>
+              <span className="media-add-hint">+ timeline</span>
             </div>
-            <span className="media-add-hint">+ timeline</span>
-          </div>
-        ))
+          );
+        })
       )}
     </div>
   );

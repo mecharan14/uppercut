@@ -17,7 +17,7 @@ pub use export::{
     export_project, mix_timeline_audio_range_to_file, mix_timeline_audio_segment, render_frame_at,
     timeline_duration, DecodeOptions, ExportError, ExportSettings, FrameRenderer,
 };
-pub use media::ReaderOptions;
+pub use media::{generate_thumbnail_strip, ReaderOptions, ThumbnailStrip};
 pub use perceive::{
     audio_peaks, detect_scenes, detect_silence, transcribe_media, AnalysisError, AudioPeaks,
     PerceiveError, SceneCut, SilenceSpan, Transcript, TranscriptSegment,

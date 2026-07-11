@@ -6,7 +6,7 @@ import { fileName, formatTimecode } from "../lib/format";
 import { clipDurationSecs, type Project, type Selection, type Track } from "../lib/types";
 import { clipLeft, RULER_H, timelineDuration, trackLayout, TRACK_LABEL_W } from "./layout";
 import { getTimelineTheme } from "./theme";
-import type { DragGhost } from "../store/editorStore";
+import type { DragGhost, MediaAssetEntry, ThumbnailAsset, WaveformAsset } from "../store/editorStore";
 
 export interface TimelineRenderState {
   project: Project | null;
@@ -15,6 +15,88 @@ export interface TimelineRenderState {
   pxPerSec: number;
   dragGhost?: DragGhost | null;
   snapGuideSecs?: number | null;
+  mediaAssets?: Record<string, MediaAssetEntry>;
+}
+
+/// Tiles the strip image across the clip's rectangle, sampling the tile nearest each
+/// on-screen column's source time — the same "filmstrip" look CapCut uses. Correctly
+/// reflects trimming: `clip.source_in_secs`/`source_out_secs` (not the whole media) map
+/// onto the drawn range, so a trimmed clip shows only its trimmed sub-range of tiles.
+function drawVideoThumbnails(
+  ctx: CanvasRenderingContext2D,
+  sourceInSecs: number,
+  sourceOutSecs: number,
+  thumb: ThumbnailAsset,
+  x: number,
+  y: number,
+  cw: number,
+  ch: number,
+) {
+  if (!thumb.image || thumb.intervalSecs <= 0) return;
+  const tileCount = thumb.cols * thumb.rows;
+  const aspect = thumb.tileWidth / thumb.tileHeight;
+  const drawH = ch;
+  const drawW = Math.max(4, drawH * aspect);
+  const duration = Math.max(sourceOutSecs - sourceInSecs, 1e-6);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, cw, ch);
+  ctx.clip();
+  for (let dx = 0; dx < cw; dx += drawW) {
+    const sourceTime = sourceInSecs + (dx / cw) * duration;
+    const tileIndex = Math.max(0, Math.min(tileCount - 1, Math.round(sourceTime / thumb.intervalSecs)));
+    const tileX = (tileIndex % thumb.cols) * thumb.tileWidth;
+    const tileY = Math.floor(tileIndex / thumb.cols) * thumb.tileHeight;
+    ctx.drawImage(
+      thumb.image,
+      tileX,
+      tileY,
+      thumb.tileWidth,
+      thumb.tileHeight,
+      x + dx,
+      y,
+      Math.min(drawW, x + cw - (x + dx)),
+      drawH,
+    );
+  }
+  ctx.restore();
+}
+
+/// `peaks` covers the whole source media at a fixed `bucketSecs` stride regardless of
+/// trim — slices out just the buckets in `[sourceInSecs, sourceOutSecs)` so a trimmed
+/// clip's waveform matches what will actually play.
+function drawWaveform(
+  ctx: CanvasRenderingContext2D,
+  sourceInSecs: number,
+  sourceOutSecs: number,
+  wave: WaveformAsset,
+  x: number,
+  y: number,
+  cw: number,
+  ch: number,
+  color: string,
+) {
+  const { peaks, bucketSecs } = wave;
+  if (peaks.length === 0 || bucketSecs <= 0) return;
+  const startIdx = Math.max(0, Math.floor(sourceInSecs / bucketSecs));
+  const endIdx = Math.min(peaks.length, Math.ceil(sourceOutSecs / bucketSecs));
+  const count = endIdx - startIdx;
+  if (count <= 0) return;
+
+  const mid = y + ch / 2;
+  const barW = Math.max(1, cw / count);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, cw, ch);
+  ctx.clip();
+  ctx.fillStyle = color;
+  for (let i = 0; i < count; i++) {
+    const peak = Math.min(1, peaks[startIdx + i] ?? 0);
+    const barH = Math.max(1, peak * ch);
+    ctx.fillRect(x + i * barW, mid - barH / 2, Math.max(1, barW - 0.5), barH);
+  }
+  ctx.restore();
 }
 
 function roundRect(
@@ -186,6 +268,28 @@ export function renderTimeline(canvas: HTMLCanvasElement, state: TimelineRenderS
       roundRect(ctx, x, cy, cw, ch, 5);
       ctx.fill();
       ctx.globalAlpha = 1;
+
+      if (clip.type === "video") {
+        const thumb = state.mediaAssets?.[clip.media_id]?.thumbnails;
+        if (thumb) {
+          drawVideoThumbnails(ctx, clip.source_in_secs, clip.source_out_secs, thumb, x, cy, cw, ch);
+        }
+      } else if (clip.type === "audio") {
+        const waveform = state.mediaAssets?.[clip.media_id]?.waveform;
+        if (waveform) {
+          drawWaveform(
+            ctx,
+            clip.source_in_secs,
+            clip.source_out_secs,
+            waveform,
+            x,
+            cy,
+            cw,
+            ch,
+            theme.clipAudioWave,
+          );
+        }
+      }
 
       if (selected) {
         ctx.strokeStyle = theme.clipBorderSelected;

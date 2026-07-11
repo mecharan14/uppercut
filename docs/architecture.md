@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **GUI rebuild in progress (through M3 of the CapCut-class editor plan).** Export drives
+Status: **GUI rebuild in progress (through M4 of the CapCut-class editor plan).** Export drives
 FFmpeg subprocess decode/encode with an offscreen wgpu compositor; the Tauri app adds a
 native wgpu preview surface on Windows, now backed by a persistent playback engine (see
 "Playback engine" below) instead of the Phase 2 MVP's per-frame render path. Linked libav
@@ -245,14 +245,54 @@ in the new `Project` and read the save path, then does the actual serialize+`fs:
 | `playback:tick` | `{ time_secs: f64, playing: bool }` | ~30 Hz while playing; once on seek/EOF |
 | `playback:state` | `{ playing: bool, time_secs: f64 }` | play start, pause, end-of-timeline |
 | `project:changed` | `{ revision: u64, can_undo: bool, can_redo: bool }` | every successful `apply_command`, `undo`, `redo`, and on project open/new/quick-start |
+| `media:thumbnails-ready` | `{ media_id, strip_path, cols, rows, tile_width, tile_height, interval_secs }` | media asset worker, on import and on project open (cache hit or fresh generation) |
+| `media:waveform-ready` | `{ media_id, peaks: f32[], bucket_secs }` | media asset worker, same triggers as above |
 
 `project:changed` doesn't carry the project itself — the frontend refetches via
 `get_project` on receipt, so it's the single source of truth for "something changed,
 re-read state," regardless of whether the mutation came from the user's own `apply_command`
 call or from undo/redo.
 
-More events (`media:*-ready`, `export:progress`/`export:done`) land in later milestones
-(see PLAN.md §4) as background asset generation and progress-reporting export are built.
+`export:progress`/`export:done` land in a later milestone (see PLAN.md §4) once
+progress-reporting export is built.
+
+### Media assets (thumbnails + waveforms, M4)
+
+`uppercut-app/src-tauri/src/media_assets.rs` generates and caches a tiled thumbnail-strip
+PNG (`uppercut_core::generate_thumbnail_strip` — one ffmpeg call, not one spawn per
+thumbnail) and waveform peaks (`uppercut_core::audio_peaks`, reused as-is from the
+perception module) for each imported media item, entirely off the edit path: it's a plain
+`tauri::async_runtime::spawn` task, not gated by `AppState::edit_lock`, so importing media
+or opening a project with many items never slows down `apply_command`/`undo`/`redo`.
+
+- **Cache key:** `(path, mtime)` hashed with `std::hash::Hash`/`DefaultHasher` — not
+  cryptographic, deliberately (see the doc comment on `cache_key`), since this only needs
+  to be a stable local-disk cache key, not a security boundary. Cached in
+  `{app_cache_dir}/media-cache/{key}.png` + `{key}.json` (the JSON sidecar holds
+  cols/rows/tile dimensions/interval and the peaks array, so `get_media_assets` can answer
+  synchronously from a cache hit with zero ffmpeg work).
+- **Triggers:** automatically after a successful `ImportMedia` command, and for every
+  media item already in the project on `open_project` (a cache hit there is a cheap file
+  read, so this is safe to call unconditionally rather than tracking "did this project
+  already get its assets"). `request_media_assets(media_id)` exists for the frontend to
+  explicitly retry after a failure.
+- **Delivery:** `media:thumbnails-ready`/`media:waveform-ready` events (see the table
+  above) for the automatic paths, or synchronously via `get_media_assets(media_id)` for a
+  cache-hit check with no generation triggered (used on mount/selection).
+- **Serving the strip PNG to the webview:** the Tauri asset protocol, scoped to
+  `$APPCACHE/media-cache/*` (`tauri.conf.json`'s `security.assetProtocol`) — the frontend
+  converts the real filesystem path to a loadable URL via `convertFileSrc`
+  (`lib/ipc.ts::assetUrl`), not base64-encoded over IPC.
+- **Frontend rendering:** `timeline/renderer.ts` tiles the strip image across a video
+  clip's rectangle, sampling the tile nearest each on-screen column's source time (mapped
+  through `source_in_secs`/`source_out_secs`, so a trimmed clip shows only its trimmed
+  sub-range); audio clips draw a `Path2D`-free (plain `fillRect` bars) waveform sliced the
+  same way from the peaks array. `MediaPanel.tsx`'s bin cards show a hover-scrub
+  filmstrip (mouse X position selects which strip tile to display via CSS
+  `background-position`), CapCut-style.
+
+Note: `perceive`'s MCP-facing thumbnail tool (letting an agent request a strip
+independent of the GUI cache) is a follow-up, not yet wired up.
 
 ## Plugins (Phase 3+)
 

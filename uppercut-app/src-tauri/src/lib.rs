@@ -1,3 +1,4 @@
+mod media_assets;
 mod playback;
 mod preview;
 
@@ -9,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager, State};
 use uppercut_core::{
     apply_command as apply_core_command, commands::ExportPreset, project::Project, Command,
+    CommandOutcome,
 };
 
 struct Session {
@@ -336,6 +338,18 @@ async fn open_project(
         .await
         .map_err(|e| e.to_string())??;
 
+    // Kick off (cache-hit-cheap) asset generation for every media item already in this
+    // project — not just newly-imported ones — so reopening a project shows filmstrips/
+    // waveforms without the user re-triggering anything.
+    for item in &project.media {
+        media_assets::request_assets(
+            app.clone(),
+            item.id.to_string(),
+            item.path.clone(),
+            item.kind,
+        );
+    }
+
     *state.session.lock() = Some(Session {
         path: path_buf,
         project,
@@ -354,6 +368,45 @@ async fn save_project(state: State<'_, AppState>) -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Explicitly (re)trigger thumbnail/waveform generation for one media item — the normal
+/// path is automatic (on import, and for every item on project open), so this exists for
+/// the frontend to retry after a generation failure without requiring a full reopen.
+#[tauri::command]
+async fn request_media_assets(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    media_id: String,
+) -> Result<(), String> {
+    let id: uuid::Uuid = media_id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    let item = state.with_session(|s| {
+        s.project
+            .find_media(id)
+            .cloned()
+            .ok_or_else(|| format!("media not found: {media_id}"))
+    })?;
+    media_assets::request_assets(app, media_id, item.path, item.kind);
+    Ok(())
+}
+
+/// Synchronously return whatever's already cached for a media item — no generation
+/// triggered. Used by the frontend on mount/selection to show a filmstrip/waveform
+/// immediately if a prior session (or the background worker) already produced one.
+#[tauri::command]
+async fn get_media_assets(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    media_id: String,
+) -> Result<media_assets::MediaAssetsPayload, String> {
+    let id: uuid::Uuid = media_id.parse().map_err(|e: uuid::Error| e.to_string())?;
+    let path = state.with_session(|s| {
+        s.project
+            .find_media(id)
+            .map(|m| m.path.clone())
+            .ok_or_else(|| format!("media not found: {media_id}"))
+    })?;
+    media_assets::get_cached(&app, &media_id, &path)
 }
 
 #[tauri::command]
@@ -380,6 +433,17 @@ async fn apply_command(
     .await
     .map_err(|e| e.to_string())?;
     let outcome = outcome.map_err(|e| e.to_string())?;
+
+    if let CommandOutcome::MediaImported { media_id } = &outcome {
+        if let Some(item) = project.find_media(*media_id) {
+            media_assets::request_assets(
+                app.clone(),
+                media_id.to_string(),
+                item.path.clone(),
+                item.kind,
+            );
+        }
+    }
 
     state.history.lock().push_undo(before);
     state.commit_project(project).await?;
@@ -633,6 +697,8 @@ pub fn run() {
             pause,
             seek,
             scrub_audio,
+            request_media_assets,
+            get_media_assets,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Uppercut");

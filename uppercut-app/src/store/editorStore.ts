@@ -32,6 +32,30 @@ export interface ToastItem {
 
 let nextToastId = 1;
 
+export interface ThumbnailAsset {
+  stripUrl: string;
+  /// `null` until the browser finishes loading `stripUrl` — renderer.ts skips drawing
+  /// (not an error) while this is null, and the store patches it in once `Image.onload`
+  /// fires, which naturally triggers a redraw via React re-rendering subscribers of
+  /// `mediaAssets`.
+  image: HTMLImageElement | null;
+  cols: number;
+  rows: number;
+  tileWidth: number;
+  tileHeight: number;
+  intervalSecs: number;
+}
+
+export interface WaveformAsset {
+  peaks: number[];
+  bucketSecs: number;
+}
+
+export interface MediaAssetEntry {
+  thumbnails?: ThumbnailAsset;
+  waveform?: WaveformAsset;
+}
+
 export interface DragGhost {
   mediaId: string;
   kind: MediaKind;
@@ -71,6 +95,10 @@ interface EditorStore {
   /// mouseup commit's own `dispatch`/`dispatchBatch` call refetches afterward regardless,
   /// so this only defers the refresh, never skips it.
   isDragging: boolean;
+  /// Thumbnail strips / waveform peaks per media id, populated from `media:thumbnails-
+  /// ready` / `media:waveform-ready` events (fired automatically by the backend on
+  /// import and on project open — nothing here triggers generation itself).
+  mediaAssets: Record<string, MediaAssetEntry>;
 
   toast(message: string, kind?: ToastKind): void;
   dismissToast(id: number): void;
@@ -87,6 +115,8 @@ interface EditorStore {
   setLeftTab(tab: LeftTab): void;
   setPlayheadLocal(secs: number): void;
   setDragging(dragging: boolean): void;
+  onThumbnailsReady(payload: ipc.ThumbnailsReadyPayload): void;
+  onWaveformReady(payload: ipc.WaveformReadyPayload): void;
 
   refetchProject(): Promise<void>;
   loadProjectFromPath(path: string): Promise<void>;
@@ -136,6 +166,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   contextMenu: null,
   snapGuideSecs: null,
   isDragging: false,
+  mediaAssets: {},
 
   toast(message, kind = "info") {
     const id = nextToastId++;
@@ -176,6 +207,46 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
   setDragging(dragging) {
     set({ isDragging: dragging });
+  },
+  onThumbnailsReady(payload) {
+    const meta: Omit<ThumbnailAsset, "image"> = {
+      stripUrl: ipc.assetUrl(payload.strip_path),
+      cols: payload.cols,
+      rows: payload.rows,
+      tileWidth: payload.tile_width,
+      tileHeight: payload.tile_height,
+      intervalSecs: payload.interval_secs,
+    };
+    const image = new Image();
+    image.onload = () => {
+      set((s) => ({
+        mediaAssets: {
+          ...s.mediaAssets,
+          [payload.media_id]: { ...s.mediaAssets[payload.media_id], thumbnails: { ...meta, image } },
+        },
+      }));
+    };
+    image.src = meta.stripUrl;
+    set((s) => ({
+      mediaAssets: {
+        ...s.mediaAssets,
+        [payload.media_id]: {
+          ...s.mediaAssets[payload.media_id],
+          thumbnails: { ...meta, image: null },
+        },
+      },
+    }));
+  },
+  onWaveformReady(payload) {
+    set((s) => ({
+      mediaAssets: {
+        ...s.mediaAssets,
+        [payload.media_id]: {
+          ...s.mediaAssets[payload.media_id],
+          waveform: { peaks: payload.peaks, bucketSecs: payload.bucket_secs },
+        },
+      },
+    }));
   },
   setDragGhost(ghost) {
     set({ dragGhost: ghost });
@@ -519,9 +590,13 @@ export function connectStoreToBackendEvents(): () => void {
     if (useEditorStore.getState().isDragging) return;
     void useEditorStore.getState().refetchProject();
   });
+  const unsubThumbs = ipc.onThumbnailsReady((p) => useEditorStore.getState().onThumbnailsReady(p));
+  const unsubWaveform = ipc.onWaveformReady((p) => useEditorStore.getState().onWaveformReady(p));
   return () => {
     unsubTick();
     unsubState();
     unsubChanged();
+    unsubThumbs();
+    unsubWaveform();
   };
 }

@@ -14,6 +14,7 @@ function currentRenderState() {
     pxPerSec: s.pxPerSec,
     dragGhost: s.dragGhost,
     snapGuideSecs: s.snapGuideSecs,
+    mediaAssets: s.mediaAssets,
   };
 }
 
@@ -26,6 +27,7 @@ export function TimelineCanvas() {
   const toolMode = useEditorStore((s) => s.toolMode);
   const dragGhost = useEditorStore((s) => s.dragGhost);
   const snapGuideSecs = useEditorStore((s) => s.snapGuideSecs);
+  const mediaAssets = useEditorStore((s) => s.mediaAssets);
   const snapEnabled = useEditorStore((s) => s.snapEnabled);
   const setDragGhost = useEditorStore((s) => s.setDragGhost);
   const dropMediaOnTimeline = useEditorStore((s) => s.dropMediaOnTimeline);
@@ -36,8 +38,16 @@ export function TimelineCanvas() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    renderTimeline(canvas, { project, playheadSecs: playhead, selection, pxPerSec, dragGhost, snapGuideSecs });
-  }, [project, playhead, selection, pxPerSec, dragGhost, snapGuideSecs]);
+    renderTimeline(canvas, {
+      project,
+      playheadSecs: playhead,
+      selection,
+      pxPerSec,
+      dragGhost,
+      snapGuideSecs,
+      mediaAssets,
+    });
+  }, [project, playhead, selection, pxPerSec, dragGhost, snapGuideSecs, mediaAssets]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

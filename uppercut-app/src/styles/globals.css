@@ -362,6 +362,11 @@ body {
   background: var(--clip-audio-bg);
 }
 
+.media-thumb.filmstrip {
+  background-repeat: no-repeat;
+  background-color: var(--clip-video-bg);
+}
+
 .media-meta {
   min-width: 0;
   flex: 1;

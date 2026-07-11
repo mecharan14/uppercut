@@ -2,7 +2,7 @@
 // call and event subscription is typed and funneled through here — components never call
 // `invoke`/`listen` directly (enforced by grep gate, see docs/architecture.md).
 
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { Project } from "./types";
@@ -30,6 +30,27 @@ export interface PlaybackStatePayload {
 
 export interface DragDropPayload {
   paths?: string[];
+}
+
+export interface ThumbnailsReadyPayload {
+  media_id: string;
+  strip_path: string;
+  cols: number;
+  rows: number;
+  tile_width: number;
+  tile_height: number;
+  interval_secs: number;
+}
+
+export interface WaveformReadyPayload {
+  media_id: string;
+  peaks: number[];
+  bucket_secs: number;
+}
+
+export interface MediaAssetsPayload {
+  thumbnails?: ThumbnailsReadyPayload;
+  waveform?: WaveformReadyPayload;
 }
 
 // ---- Project lifecycle ----
@@ -80,6 +101,23 @@ export function exportProject(outputPath: string, preset: string): Promise<void>
   return invoke("export_project", { outputPath, preset });
 }
 
+// ---- Media assets (thumbnails / waveforms) ----
+
+export function requestMediaAssets(mediaId: string): Promise<void> {
+  return invoke("request_media_assets", { mediaId });
+}
+
+export function getMediaAssets(mediaId: string): Promise<MediaAssetsPayload> {
+  return invoke<MediaAssetsPayload>("get_media_assets", { mediaId });
+}
+
+/// Converts a real filesystem path (as returned by `get_media_assets`/`media:*-ready`)
+/// into a URL the webview can load — backed by the Tauri asset protocol, scoped to the
+/// media cache dir (see `tauri.conf.json`'s `security.assetProtocol.scope`).
+export function assetUrl(path: string): string {
+  return convertFileSrc(path);
+}
+
 // ---- Preview / playback ----
 
 export function setPreviewBounds(
@@ -121,6 +159,16 @@ export function onPlaybackState(cb: (payload: PlaybackStatePayload) => void): ()
 
 export function onProjectChanged(cb: (payload: ProjectChangedPayload) => void): () => void {
   const unlisten = listen<ProjectChangedPayload>("project:changed", (e) => cb(e.payload));
+  return () => void unlisten.then((f) => f());
+}
+
+export function onThumbnailsReady(cb: (payload: ThumbnailsReadyPayload) => void): () => void {
+  const unlisten = listen<ThumbnailsReadyPayload>("media:thumbnails-ready", (e) => cb(e.payload));
+  return () => void unlisten.then((f) => f());
+}
+
+export function onWaveformReady(cb: (payload: WaveformReadyPayload) => void): () => void {
+  const unlisten = listen<WaveformReadyPayload>("media:waveform-ready", (e) => cb(e.payload));
   return () => void unlisten.then((f) => f());
 }
 

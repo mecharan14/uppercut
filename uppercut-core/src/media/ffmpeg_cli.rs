@@ -224,6 +224,66 @@ fn scaled_dimensions(src_width: u32, src_height: u32, target_height: Option<u32>
     }
 }
 
+/// Tiled thumbnail strip: one PNG containing `cols × rows` evenly time-sampled frames,
+/// laid out left-to-right, top-to-bottom.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThumbnailStrip {
+    pub cols: u32,
+    pub rows: u32,
+    pub tile_width: u32,
+    pub tile_height: u32,
+    pub tile_count: u32,
+    pub interval_secs: f64,
+}
+
+/// Generate a tiled thumbnail-strip PNG for `path`, sampling roughly one frame every 2
+/// seconds of source duration (capped to `max_tiles`, and always at least one). A single
+/// ffmpeg call (`fps=1/interval,scale=-2:h,tile=colsxrows`) produces the whole strip —
+/// not one spawn per thumbnail.
+pub fn generate_thumbnail_strip(
+    path: &Path,
+    out_path: &Path,
+    max_tiles: u32,
+    tile_height: u32,
+) -> Result<ThumbnailStrip, FfmpegCliError> {
+    let probed = probe_video(path)?;
+    let duration = probed.duration_secs.max(0.1);
+
+    let ideal = (duration / 2.0).ceil() as u32;
+    let tile_count = ideal.clamp(1, max_tiles.max(1));
+    let interval_secs = duration / tile_count as f64;
+
+    let cols = (tile_count as f64).sqrt().ceil().max(1.0) as u32;
+    let rows = tile_count.div_ceil(cols);
+
+    let (width, height) = scaled_dimensions(probed.width, probed.height, Some(tile_height));
+
+    let filter = format!("fps=1/{interval_secs:.6},scale=-2:{height},tile={cols}x{rows}");
+
+    let status = Command::new(ffmpeg_path()?)
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+        .arg(path)
+        .args(["-frames:v", "1", "-vf", &filter])
+        .arg(out_path)
+        .status()
+        .map_err(|e| FfmpegCliError::SpawnFailed {
+            tool: "ffmpeg",
+            message: e.to_string(),
+        })?;
+    if !status.success() {
+        return Err(FfmpegCliError::NonZeroExit(status.code().unwrap_or(-1)));
+    }
+
+    Ok(ThumbnailStrip {
+        cols,
+        rows,
+        tile_width: width,
+        tile_height: height,
+        tile_count,
+        interval_secs,
+    })
+}
+
 /// Sequential RGBA frame reader backed by a long-lived `ffmpeg` decode pipe.
 pub struct VideoReader {
     child: Child,
@@ -734,5 +794,84 @@ mod scaling_tests {
     fn scaled_dimensions_width_rounds_up_like_ffmpeg_ffalign() {
         let (w, _) = scaled_dimensions(1921, 1081, Some(721));
         assert_eq!(w, 1284);
+    }
+}
+
+#[cfg(test)]
+mod thumbnail_strip_tests {
+    use super::{ffmpeg_path, generate_thumbnail_strip};
+    use std::process::Command;
+
+    fn ffmpeg_available() -> bool {
+        super::is_available()
+    }
+
+    fn generate_test_video(path: &std::path::Path, duration_secs: u32) {
+        let status = Command::new(ffmpeg_path().unwrap())
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("testsrc=duration={duration_secs}:size=320x240:rate=10"),
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(path)
+            .status()
+            .expect("ffmpeg");
+        assert!(status.success());
+    }
+
+    #[test]
+    fn generate_thumbnail_strip_produces_a_grid_covering_the_duration() {
+        if !ffmpeg_available() {
+            eprintln!("skipping thumbnail strip test: ffmpeg not on PATH");
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("uppercut-thumbs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let video_path = dir.join("src.mp4");
+        let out_path = dir.join("strip.png");
+        generate_test_video(&video_path, 6);
+
+        let strip = generate_thumbnail_strip(&video_path, &out_path, 10, 90).unwrap();
+
+        assert!(out_path.is_file());
+        assert!(std::fs::metadata(&out_path).unwrap().len() > 0);
+        // ~1 tile per 2s of a 6s clip.
+        assert_eq!(strip.tile_count, 3);
+        assert!(strip.cols * strip.rows >= strip.tile_count);
+        assert_eq!(strip.tile_height % 2, 0);
+        assert_eq!(strip.tile_width % 2, 0);
+        assert!((strip.interval_secs - 2.0).abs() < 1e-6);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn generate_thumbnail_strip_caps_tile_count_for_long_videos() {
+        if !ffmpeg_available() {
+            eprintln!("skipping thumbnail strip cap test: ffmpeg not on PATH");
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("uppercut-thumbs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let video_path = dir.join("src.mp4");
+        let out_path = dir.join("strip.png");
+        // A ~1-per-2s rate would want 5 tiles for 10s; cap forces 3.
+        generate_test_video(&video_path, 10);
+
+        let strip = generate_thumbnail_strip(&video_path, &out_path, 3, 90).unwrap();
+        assert_eq!(strip.tile_count, 3);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
